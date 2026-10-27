@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-deployment
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: redis-db
+  template:
+    metadata:
+      labels:
+        app: redis-db
+    spec:
+      containers:
+        - name: redis-db
+          image: redis:alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 6379
+          volumeMounts:
+            - mountPath: /data # Standard data directory for Redis
+              name: redis-storage
+      volumes:
+        - name: redis-storage
+          persistentVolumeClaim:
+            claimName: redis-claim # Hooks up the PVC we defined above!

@@ -1,0 +1,123 @@
+<mxfile host="Electron">
+  <diagram id="pv-pvc-arch" name="8-pv-pvc Architecture">
+    <mxGraphModel dx="900" dy="700" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1220" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="Kubernetes Cluster — 8-pv-pvc: Services, Deployments &amp; Storage" style="text;html=1;fontSize=20;fontStyle=1;align=left;verticalAlign=middle;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="200" y="20" width="720" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="cluster" value="Kubernetes Cluster (e.g. minikube / single node)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#666666;dashed=1;verticalAlign=top;align=left;fontSize=12;fontStyle=2;spacingTop=4;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="200" y="80" width="960" height="880" as="geometry"/>
+        </mxCell>
+        <mxCell id="client" value="&lt;b&gt;External Client&lt;/b&gt;&lt;br&gt;Browser / curl&lt;br&gt;(outside cluster)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="400" width="130" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="svcFrontend" value="&lt;b&gt;frontend-service&lt;/b&gt;&lt;br&gt;Service — type: &lt;b&gt;NodePort&lt;/b&gt;&lt;br&gt;port 80 → targetPort 3000&lt;br&gt;nodePort: &lt;b&gt;30081&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="250" y="150" width="240" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="svcBackend" value="&lt;b&gt;go-backend-service&lt;/b&gt;&lt;br&gt;Service — type: &lt;b&gt;NodePort&lt;/b&gt;&lt;br&gt;port 80 → targetPort 8080&lt;br&gt;nodePort: &lt;b&gt;30080&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="560" y="150" width="240" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="svcRedis" value="&lt;b&gt;redis-db-service&lt;/b&gt;&lt;br&gt;Service — type: &lt;b&gt;ClusterIP&lt;/b&gt;&lt;br&gt;port 6379 → targetPort 6379&lt;br&gt;(internal traffic only)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="870" y="150" width="240" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="depFrontend" value="&lt;b&gt;frontend-deployment&lt;/b&gt; — Deployment, replicas: 6&lt;br&gt;image: nitinkc/k8s-frontend&lt;br&gt;env: BACKEND_URL=http://go-backend-service:80" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8f9fa;strokeColor=#82b366;dashed=1;verticalAlign=top;fontSize=10;spacingTop=4;" vertex="1" parent="1">
+          <mxGeometry x="250" y="330" width="240" height="230" as="geometry"/>
+        </mxCell>
+        <mxCell id="fePod1" value="&lt;b&gt;Pod&lt;/b&gt; — app=frontend-ui&lt;br&gt;containerPort: 3000" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="depFrontend">
+          <mxGeometry x="15" y="75" width="210" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="fePod2" value="&lt;b&gt;Pod&lt;/b&gt; — app=frontend-ui&lt;br&gt;containerPort: 3000" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="depFrontend">
+          <mxGeometry x="15" y="125" width="210" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="fePod3" value="&lt;b&gt;Pod&lt;/b&gt; — app=frontend-ui&lt;br&gt;containerPort: 3000&lt;br&gt;&lt;i&gt;... ×6 total&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="depFrontend">
+          <mxGeometry x="15" y="175" width="210" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="depBackend" value="&lt;b&gt;go-server-deployment&lt;/b&gt; — Deployment, replicas: 3&lt;br&gt;image: nitinkc/go-k8s-server&lt;br&gt;readinessProbe: GET /health :8080" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8f9fa;strokeColor=#10739e;dashed=1;verticalAlign=top;fontSize=10;spacingTop=4;" vertex="1" parent="1">
+          <mxGeometry x="560" y="330" width="240" height="230" as="geometry"/>
+        </mxCell>
+        <mxCell id="bePod1" value="&lt;b&gt;Pod&lt;/b&gt; — app=go-k8s-server&lt;br&gt;containerPort: 8080" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#b1ddf0;strokeColor=#10739e;fontSize=10;" vertex="1" parent="depBackend">
+          <mxGeometry x="15" y="75" width="210" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="bePod2" value="&lt;b&gt;Pod&lt;/b&gt; — app=go-k8s-server&lt;br&gt;containerPort: 8080" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#b1ddf0;strokeColor=#10739e;fontSize=10;" vertex="1" parent="depBackend">
+          <mxGeometry x="15" y="125" width="210" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="bePod3" value="&lt;b&gt;Pod&lt;/b&gt; — app=go-k8s-server&lt;br&gt;containerPort: 8080&lt;br&gt;&lt;i&gt;... ×3 total&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#b1ddf0;strokeColor=#10739e;fontSize=10;" vertex="1" parent="depBackend">
+          <mxGeometry x="15" y="175" width="210" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="depRedis" value="&lt;b&gt;redis-deployment&lt;/b&gt; — Deployment, replicas: 3&lt;br&gt;image: redis:alpine&lt;br&gt;volumeMounts: /data ← claimName: redis-claim" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8f9fa;strokeColor=#b85450;dashed=1;verticalAlign=top;fontSize=10;spacingTop=4;" vertex="1" parent="1">
+          <mxGeometry x="870" y="330" width="240" height="230" as="geometry"/>
+        </mxCell>
+        <mxCell id="redisPod1" value="&lt;b&gt;Pod&lt;/b&gt; — app=redis-db&lt;br&gt;containerPort: 6379 • mount /data" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="depRedis">
+          <mxGeometry x="15" y="75" width="210" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="redisPod2" value="&lt;b&gt;Pod&lt;/b&gt; — app=redis-db&lt;br&gt;containerPort: 6379 • mount /data" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="depRedis">
+          <mxGeometry x="15" y="125" width="210" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="redisPod3" value="&lt;b&gt;Pod&lt;/b&gt; — app=redis-db&lt;br&gt;containerPort: 6379 • mount /data&lt;br&gt;&lt;i&gt;... ×3 total&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="depRedis">
+          <mxGeometry x="15" y="175" width="210" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="pvc" value="&lt;b&gt;PersistentVolumeClaim — redis-claim&lt;/b&gt;&lt;br&gt;requests: 1Gi storage • accessModes: ReadWriteOnce" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="870" y="620" width="240" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="pv" value="&lt;b&gt;PersistentVolume&lt;/b&gt;&lt;br&gt;(dynamically provisioned via StorageClass)&lt;br&gt;1Gi • survives pod restarts" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="870" y="730" width="240" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="legend" value="&lt;b&gt;LEGEND&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#d79b00&quot;&gt;&amp;#9632;&lt;/font&gt; Service — &lt;b&gt;NodePort&lt;/b&gt;: reachable from outside the cluster via &amp;lt;node-ip&amp;gt;:&amp;lt;nodePort&amp;gt;&lt;br&gt;&lt;font color=&quot;#6c8ebf&quot;&gt;&amp;#9632;&lt;/font&gt; Service — &lt;b&gt;ClusterIP&lt;/b&gt;: internal-only virtual IP, no external access&lt;br&gt;&lt;font color=&quot;#82b366&quot;&gt;&amp;#9632;&lt;/font&gt; Frontend pods (app=frontend-ui) • &lt;font color=&quot;#10739e&quot;&gt;&amp;#9632;&lt;/font&gt; Backend pods (app=go-k8s-server) • &lt;font color=&quot;#b85450&quot;&gt;&amp;#9632;&lt;/font&gt; Redis pods (app=redis-db)&lt;br&gt;&lt;font color=&quot;#9673a6&quot;&gt;&amp;#9632;&lt;/font&gt; PVC — claim for storage • &lt;font color=&quot;#666666&quot;&gt;&amp;#9632;&lt;/font&gt; PV — actual storage (persists beyond pod lifecycle)&lt;br&gt;&lt;br&gt;&lt;b&gt;Arrows:&lt;/b&gt; solid = Service routing via selector • dashed = in-cluster DNS call • dotted = storage binding" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;align=left;verticalAlign=top;fontSize=10;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="250" y="620" width="550" height="200" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#d79b00;strokeWidth=2;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="client" target="svcFrontend" value="&lt;b&gt;http://&amp;lt;node-ip&amp;gt;:30081&lt;/b&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="215" y="440"/>
+              <mxPoint x="215" y="195"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#d79b00;strokeWidth=2;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="client" target="svcBackend" value="&lt;b&gt;http://&amp;lt;node-ip&amp;gt;:30080&lt;/b&gt; (direct backend access)">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="232" y="450"/>
+              <mxPoint x="232" y="135"/>
+              <mxPoint x="680" y="135"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#82b366;strokeWidth=2;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="svcFrontend" target="depFrontend" value="selector: app=frontend-ui&lt;br&gt;load-balances over pods :3000">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#9673a6;strokeWidth=2;fontSize=10;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0.5;entryY=1;" edge="1" parent="1" source="depFrontend" target="svcBackend" value="BACKEND_URL → http://go-backend-service:80&lt;br&gt;(cluster-internal DNS)">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="525" y="445"/>
+              <mxPoint x="525" y="280"/>
+              <mxPoint x="680" y="280"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#10739e;strokeWidth=2;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="svcBackend" target="depBackend" value="selector: app=go-k8s-server&lt;br&gt;load-balances over pods :8080">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#6c8ebf;strokeWidth=2;fontSize=10;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0.5;entryY=1;" edge="1" parent="1" source="depBackend" target="svcRedis" value="redis-db-service:6379&lt;br&gt;(cluster-internal DNS)">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="835" y="445"/>
+              <mxPoint x="835" y="270"/>
+              <mxPoint x="990" y="270"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#b85450;strokeWidth=2;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="svcRedis" target="depRedis" value="selector: app=redis-db&lt;br&gt;routes to pod :6379">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#9673a6;strokeWidth=2;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="depRedis" target="pvc" value="volumes → persistentVolumeClaim&lt;br&gt;claimName: redis-claim">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#666666;strokeWidth=2;fontSize=10;labelBackgroundColor=#ffffff;dashed=1;" edge="1" parent="1" source="pvc" target="pv" value="bound to PV&lt;br&gt;(dynamic provisioning)">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

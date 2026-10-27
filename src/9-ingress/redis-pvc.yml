@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-claim
+spec:
+  accessModes:
+    - ReadWriteOnce # Can be mounted read-write by a single node
+  resources:
+    requests:
+      storage: 1Gi # Asking for 1 Gigabyte of storage
