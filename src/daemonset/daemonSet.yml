@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-info-daemonset
+  labels:
+    app: node-info
+spec:
+  selector:
+    matchLabels:
+      app: node-info
+  template:
+    metadata:
+      labels:
+        app: node-info
+    spec:
+      containers:
+        - name: nginx-node-reporter
+          image: nginx:alpine
+          ports:
+            - containerPort: 80
+          # The Downward API injects the Node name dynamically into an environment variable
+          env:
+            - name: MY_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          # A quick lifecycle hook to print the node name into the Nginx welcome page
+          lifecycle:
+            postStart:
+              exec:
+                command: ["/bin/sh", "-c", "echo 'Hello from Node: ' $MY_NODE_NAME > /usr/share/nginx/html/index.html"]
