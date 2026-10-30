@@ -1,6 +1,8 @@
 site_name: Acme Labs — K8s Platform Playbook
 site_description: Hands-on Docker, Minikube & GKE platform engineering labs (network-first, diagram-driven)
 docs_dir: docs
+site_url: https://nitinkc.github.io/KubernetesConcepts
+github_url: https://github.com/nitinkc/DevOpsLearning
 
 theme:
   name: material
@@ -11,8 +13,8 @@ theme:
     - navigation.sections
     - navigation.expand
     - navigation.path
-    - navigation.top           # Back-to-top button
-    - navigation.footer        # Prev/Next page links
+    - navigation.top # Back-to-top button
+    - navigation.footer # Prev/Next page links
     # Search
     - search.suggest
     - search.highlight
@@ -82,27 +84,27 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Reference & Cheat Sheets:
-    - 00 · Architecture Decisions (ADRs): reference/00-architecture-decisions.md
-    - 01 · CLI Command Cheat Sheet: reference/01-command-cheatsheet.md
-    - 02 · Failure Signatures & Triage: reference/02-failure-triage-matrix.md
-    - 03 · Local-to-GCP Rosetta Stone: reference/03-gcp-rosetta-stone.md
+      - 00 · Architecture Decisions (ADRs): reference/00-architecture-decisions.md
+      - 01 · CLI Command Cheat Sheet: reference/01-command-cheatsheet.md
+      - 02 · Failure Signatures & Triage: reference/02-failure-triage-matrix.md
+      - 03 · Local-to-GCP Rosetta Stone: reference/03-gcp-rosetta-stone.md
   - Part A · Underlay & Cluster:
-    - Lab 01 · Docker VPC, Routing & Firewall: labs/lab-01-docker-underlay-routing.md
-    - Lab 02 · Minikube IPAM & Cilium eBPF: labs/lab-02-minikube-ipam-cilium.md
+      - Lab 01 · Docker VPC, Routing & Firewall: labs/lab-01-docker-underlay-routing.md
+      - Lab 02 · Minikube IPAM & Cilium eBPF: labs/lab-02-minikube-ipam-cilium.md
   - Part B · Workloads & Egress:
-    - Lab 03 · Services, DNS & App Packaging: labs/lab-03-services-dns-packaging.md
-    - Lab 04 · Egress & The 4 Outbound Doors: labs/lab-04-egress-four-doors.md
+      - Lab 03 · Services, DNS & App Packaging: labs/lab-03-services-dns-packaging.md
+      - Lab 04 · Egress & The 4 Outbound Doors: labs/lab-04-egress-four-doors.md
   - Part C · Zero-Trust Security:
-    - Lab 05 · L3/L4 NetworkPolicy & Hubble: labs/lab-05-l3-l4-network-policy.md
-    - Lab 06 · L7 Istio mTLS & SPIFFE AuthZ: labs/lab-06-l7-istio-mtls-authz.md
+      - Lab 05 · L3/L4 NetworkPolicy & Hubble: labs/lab-05-l3-l4-network-policy.md
+      - Lab 06 · L7 Istio mTLS & SPIFFE AuthZ: labs/lab-06-l7-istio-mtls-authz.md
   - Part D · Observe, Enter & GitOps:
-    - Lab 07 · 4-Container Pod & Central Logs: labs/lab-07-sidecars-central-logging.md
-    - Lab 08 · North-South Ingress Gauntlet: labs/lab-08-ingress-metallb-gateway.md
-    - Lab 09 · FluxCD GitOps Ordering: labs/lab-09-gitops-flux-ordering.md
+      - Lab 07 · 4-Container Pod & Central Logs: labs/lab-07-sidecars-central-logging.md
+      - Lab 08 · North-South Ingress Gauntlet: labs/lab-08-ingress-metallb-gateway.md
+      - Lab 09 · FluxCD GitOps Ordering: labs/lab-09-gitops-flux-ordering.md
   - Part E · Production Handoff:
-    - Lab 10 · Cold Rebuild & GKE Handoff: labs/lab-10-cold-rebuild-gke-handoff.md
+      - Lab 10 · Cold Rebuild & GKE Handoff: labs/lab-10-cold-rebuild-gke-handoff.md
   - Planning (Original Docs):
-    - GKE Platform Plan (P0–P10): planning/acme-labs-plan.md
-    - Minikube Learning Plan (S0–S12): planning/acme-labs-minikube-learning-plan.md
-    - kind Practice Lab (K1–K11): planning/acme-labs-k8s-on-docker-practice.md
-    - Design Deck (HTML): planning/design-deck.md
+      - GKE Platform Plan (P0–P10): planning/acme-labs-plan.md
+      - Minikube Learning Plan (S0–S12): planning/acme-labs-minikube-learning-plan.md
+      - kind Practice Lab (K1–K11): planning/acme-labs-k8s-on-docker-practice.md
+      - Design Deck (HTML): planning/design-deck.md
