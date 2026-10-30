@@ -2,7 +2,7 @@ site_name: Acme Labs — K8s Platform Playbook
 site_description: Hands-on Docker, Minikube & GKE platform engineering labs (network-first, diagram-driven)
 docs_dir: docs
 site_url: https://nitinkc.github.io/KubernetesConcepts
-github_url: https://github.com/nitinkc/DevOpsLearning
+repo_url: https://github.com/nitinkc/DevOpsLearning
 
 theme:
   name: material
@@ -39,6 +39,8 @@ theme:
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
 
 plugins:
   - search:
