@@ -1,0 +1,6 @@
+apiVersion: v2
+name: acme-microservice
+description: Tier-2 Reusable Platform Helm Chart for Acme Labs Domains
+type: application
+version: 0.3.0
+appVersion: "1.0.0"

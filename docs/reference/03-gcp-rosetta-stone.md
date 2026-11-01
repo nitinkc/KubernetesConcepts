@@ -13,7 +13,7 @@
 ## 2. Component-by-Component Translation Table
 
 | Architectural Layer | Local Lab Implementation | GCP GKE Implementation | What Transfers 100% | What Is New on GCP (Focus Here in P1–P9) |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | **VPC & Subnets** | `docker network create acme-main` (`10.10.0.0/24`) & `acme-ops` (`10.10.1.0/28`) | `google_compute_network` (`delete_default_routes_on_create=true`) + `google_compute_subnetwork` | Primary CIDR layout, non-overlapping IPAM rules | Secondary ranges (`gke-pods`, `gke-svcs`), `proxy-only-subnet` (`10.10.254.0/23`), Master `/28` (`10.10.250.0/28`) |
 | **Routes & Next Hops** | `ip route add ... via 10.10.0.250` on nodes & `probe` | `google_compute_route` resources with priorities (`900`, `999`) | Longest-prefix match, asymmetric routing failure mode | `next_hop_gateway = "default-internet-gateway"` is required for Cloud NAT to trigger |
 | **L3/L4 Firewall** | `iptables -P FORWARD DROP` on `vpc-router` | `google_compute_firewall` rules on VPC | Stateful connection tracking, Authorized Networks concept | **Master → Node Webhook firewall** (`10.10.250.0/28` → `15017, 8443, 9443`), Google LB health-check ranges (`130.211.0.0/22`, `35.191.0.0/16`) |
@@ -34,6 +34,9 @@
 | **Pod event triage** | `kubectl get pods → describe pod → logs --previous` | Identical `kubectl` + GKE console Events tab | The entire debug flow transfers unchanged | Events also surface in Cloud Logging (`k8s_event`) |
 | **LB backends** | MetalLB L2 VIP → kube-proxy → pod | Google LBs → **NEGs** (Network Endpoint Groups: pods are LB backends directly) | VIP → pod semantics | No NodePort hop; `502` almost always = failing health checks (wrong path/port or blocked `130.211.0.0/22` + `35.191.0.0/16`) |
 | **`.env` / secrets** | K8s `Secret` + `envFrom`/`secretKeyRef` | **Secret Manager** + External Secrets Operator (or CSI driver) | Same pod-level env/volume injection | ESO syncs Secret Manager → K8s `Secret`; audit + rotation are the real wins |
+| **Shared database** | `commerce-db` Postgres StatefulSet (`dom-data`), schemas `inventory` + `sales`, `orders_rw`/`inventory_rw` roles | **`commerce-sql`** Cloud SQL Postgres (private IP via PSA `100.64.0.0/20`) | Same schemas, roles, grants; single-tx "decrement + order" saga | Cloud SQL Auth Proxy as 5th pod sidecar (`DATABASE_URL` → `127.0.0.1:5432`); IAM DB auth replaces pg passwords |
+| **Private database** | `payments-db` Postgres StatefulSet (`dom-data`), `payments_rw` only | **`payments-sql`** Cloud SQL Postgres | Same instance-level isolation; `payments_rw` exists only here | Instance-level IAM/`cloudsql.client` binding replaces the `payments-db-ingress` NetworkPolicy |
+| **DB seeding** | `db-seed` Kubernetes Job (`psql`, idempotent) | SQL migrations in app CI, or `google_sql_user`/`google_sql_database` | Same "schema exists before apps" ordering | Flux `25-data` tier ↔ CI migration step before HelmRelease rollout |
 | **Registry auth** | Open local registry (`10.10.0.200:5000`) | Artifact Registry via **node SA** `artifactregistry.reader` | Pull without `imagePullSecrets` | Pull secrets replaced by node/workload identity; AR mirror keeps Door 1 egress-only |
 | **Metrics & dashboards** | none — logs only (aggregator) | **Cloud Monitoring** — Golden Signals: latency, traffic, errors, saturation | — | Genuinely new: `monitoring_config` + Managed Prometheus / dashboards (P6) |
 | **Distributed tracing** | `otel-collector` → `debug` exporter (spans to stdout) | **Cloud Trace** via `googlecloud` exporter | Same OTLP instrumentation & pipeline | Correlate logs↔traces with `trace` field in log entries; swap is one exporter line |

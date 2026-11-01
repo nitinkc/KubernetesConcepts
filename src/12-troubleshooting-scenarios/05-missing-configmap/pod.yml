@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: configmap-pod
+  labels:
+    app: cm-demo
+spec:
+  containers:
+    - name: nginx
+      image: nginx
+      volumeMounts:
+        - name: config
+          mountPath: /etc/app-config
+  volumes:
+    - name: config
+      configMap:
+        name: my-map # this ConfigMap does not exist

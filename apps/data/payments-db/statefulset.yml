@@ -1,0 +1,64 @@
+# payments-db — payments' PRIVATE Postgres. Nobody but dom-payments may reach it;
+# orders -> payments-db:5432 blocked is the Lab 05 data-isolation showcase.
+apiVersion: v1
+kind: Service
+metadata:
+  name: payments-db
+  namespace: dom-data
+spec:
+  clusterIP: None
+  selector:
+    app: payments-db
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: payments-db
+  namespace: dom-data
+spec:
+  serviceName: payments-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payments-db
+  template:
+    metadata:
+      labels:
+        app: payments-db
+        tier: data
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: payments-db-auth
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "payments"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+              subPath: pgdata
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

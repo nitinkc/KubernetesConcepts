@@ -3,14 +3,17 @@ kind: Ingress
 metadata:
   name: my-app-ingress
   annotations:
-    # Tells the Ingress controller to rewrite the path if needed (e.g., stripping /api)
+    # 1. THIS IS THE MISSING PIECE: Tells Nginx to parse regular expressions
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    # 2. Rewrites the URL path before sending it to your backend
     nginx.ingress.kubernetes.io/rewrite-target: /$2
 spec:
+  ingressClassName: nginx
   rules:
     - host: my-app.local
       http:
         paths:
-          # Rule 1: Route API traffic to the backend service
+          # Rule 1: Matches /api, /api/, or /api/users and routes to backend
           - path: /api(/|$)(.*)
             pathType: ImplementationSpecific
             backend:
@@ -18,7 +21,7 @@ spec:
                 name: go-backend-service
                 port:
                   number: 80
-          # Rule 2: Route all other traffic to the frontend service
+          # Rule 2: Matches everything else and routes to frontend
           - path: /(.*)
             pathType: ImplementationSpecific
             backend:

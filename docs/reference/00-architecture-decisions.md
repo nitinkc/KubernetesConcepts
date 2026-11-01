@@ -11,7 +11,7 @@ Pod and Service CIDRs are **baked in at cluster creation** and painful to change
 ![Master IPAM blueprint](../diagrams/adr-ipam-blueprint.drawio.svg)
 
 | Address Space | CIDR | Total IPs | Per-Node / Purpose | Who Allocates It? | Routable Outside Cluster? | GCP Equivalent |
-|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- |
 | **Primary Node Subnet** | `10.10.0.0/24` | 254 | `.10` `.11` `.12` (Minikube Nodes)<br>`.200` (Registry), `.240-.249` (MetalLB), `.250` (Router) | Docker Bridge / GCP Subnet | **Yes** (Advertised over VPN/NCC) | `google_compute_subnetwork.gke_main` |
 | **Ops / Bastion Subnet** | `10.10.1.0/28` | 14 | `.2` (Router), `.3` (`probe` container) | Docker Bridge / GCP Subnet | **Yes** | `google_compute_subnetwork.ops` |
 | **Pod CIDR** | `10.20.0.0/20` | 4,096 | `/24` per node locally (16 nodes max)<br>`/25` on GKE (`max_pods_per_node=64` → 32 nodes max) | `kube-controller-manager` (`node.spec.podCIDR`) + Cilium | **No** locally (SNAT'd to Node IP)<br>**VPC-only** on GKE (SNAT'd to On-Prem unless `ip-masq-agent` configured) | `secondary_ip_range` `gke-pods` |
@@ -21,6 +21,7 @@ Pod and Service CIDRs are **baked in at cluster creation** and painful to change
 | **PSA Peering** | `100.64.0.0/20` | 4,096 | Cloud SQL Private IP (`servicenetworking`) | Google Service Producer | Non-transitive VPC Peering | `purpose = "VPC_PEERING"` (RFC 6598 saves `10.x`) |
 
 ### The 3 Golden IPAM Rules for Architects
+
 1. **Node Capacity Is Often Capped by Pod CIDR, Not Node Subnet:** A `/20` Pod CIDR has sixteen `/24` blocks. With default Kubernetes settings (`--node-cidr-mask-size=24`, up to 110 pods/node), **your cluster cannot scale past 16 nodes** even if your node subnet has 250 free IPs! On GKE, setting `max_pods_per_node = 64` shrinks the slice to `/25` (128 IPs), doubling max nodes to 32.
 2. **Overlap Is Silent Until You Connect Networks:** Two clusters with `10.20.0.0/20` run fine in isolation. The day you peer their VPCs or attach them to Cloud Router/VPN, routing breaks catastrophically.
 3. **Never Burn `10.x` on Managed Databases:** Use RFC 6598 (`100.64.0.0/10`) for Private Services Access (Cloud SQL) so enterprise `10.x` ranges remain clean for VPCs and on-prem spokes.
@@ -34,7 +35,7 @@ Pod and Service CIDRs are **baked in at cluster creation** and painful to change
 ![ADR-01 — Cluster isolation options](../diagrams/adr-cluster-isolation.drawio.svg)
 
 | Dimension | Option A: 1 Cluster + Layered Zero-Trust (Chosen) | Option B: 3 Clusters in 3 VPCs |
-|---|---|---|
+| --- | --- | --- |
 | **Control Plane & Node Cost** | **1x** (Fits free-tier zonal credit; high bin-packing density) | **3x** management fees, 3x idle node headroom, 3x Istio/Flux control planes |
 | **East-West Latency** | Sub-millisecond (Same VPC, Cilium eBPF direct routing) | Requires VPC Peering / NCC / Private Service Connect + cross-cluster ingress |
 | **Security Boundary** | **Defense-in-Depth:** L4 eBPF (`NetworkPolicy`) + L7 Crypto Identity (`SPIFFE`) + Cloud IAM (`Workload Identity`) | Hard kernel/VPC boundary |
@@ -45,7 +46,7 @@ Pod and Service CIDRs are **baked in at cluster creation** and painful to change
 ### ADR-02: CNI Selection — Cilium eBPF (Dataplane V2) vs Calico vs Kindnet
 
 | Feature | Kindnet / Bridge | Calico (iptables) | Cilium eBPF / GKE Dataplane V2 (Chosen) |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **Enforces `NetworkPolicy`?** | **No** (Silently ignores policies!) | Yes (via Linux `iptables`/`ipsets`) | **Yes** (In-kernel eBPF programs) |
 | **Service Load Balancing** | `kube-proxy` `iptables` (O(N) rule scan) | `kube-proxy` `iptables` / IPVS | **eBPF socket-level bypass** (O(1) hash lookup) |
 | **Observability** | Blind (`tcpdump` only) | Paid Enterprise or basic logs | **Hubble CLI/UI built-in** (`hubble observe --verdict DROPPED`) |
@@ -56,7 +57,7 @@ Pod and Service CIDRs are **baked in at cluster creation** and painful to change
 ### ADR-03: Service Mesh — Istio Sidecar Mode vs Ambient Mode vs No Mesh
 
 | Requirement | No Mesh (CNI Only) | Istio Ambient Mode (ztunnel) | Istio Sidecar Mode (Chosen for Training) |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **Caller Identity** | IP Address / Pod Label only (Spoofable if CNI bypassed) | Cryptographic SPIFFE X.509 (`cluster.local/ns/.../sa/...`) | Cryptographic SPIFFE X.509 (`cluster.local/ns/.../sa/...`) |
 | **L7 HTTP Path/Method Policy** | Limited (Cilium L7 requires Envoy DaemonSet) | Requires deploying Waypoint proxies | **Every pod has dedicated `istio-proxy` (Envoy)** |
 | **Why Chosen Here?** | Lacks mTLS & SPIFFE | Hides pod-level networking mechanics | **Exposes real enterprise failure modes:** webhook ordering, `15012` xDS egress, `1/2 Ready` traps, and `STRICT` mTLS vs plaintext LBs. |
@@ -68,7 +69,7 @@ Pod and Service CIDRs are **baked in at cluster creation** and painful to change
 ![ADR-04 — Three telemetry patterns](../diagrams/adr-telemetry-patterns.drawio.svg)
 
 | Pattern | Mechanism | Pros | Cons / Network Trap |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **Pattern A: `stdout` → Node Agent** | App & Envoy write JSON to `stdout`; Kubelet writes `/var/log/containers`; node DaemonSet ships it. | Zero pod RAM overhead; works even if pod egress is locked down. | **Runs under Node SA**, not Pod SA; noisy neighbor on node disk can drop logs. |
 | **Pattern B: Shared `emptyDir` + `fluent-bit` Sidecar** | App writes `/var/log/app/app.log`; `fluent-bit` tails file, enriches metadata, ships directly. | Works for legacy apps that only log to files; uses **Pod's Workload Identity**. | Costs ~32Mi RAM/pod; **breaks under Default-Deny Egress** unless collector/API port + metadata server (`169.254.169.252:988`) are allowed! |
 | **Pattern C: Loopback OTLP + `otel-collector` Sidecar** | App sends traces/logs/metrics to `127.0.0.1:4318`; OTel batches, redacts PII, exports to backend. | Vendor-neutral (swap debug exporter for `googlecloud` with 1 line); offloads batching/retries from app. | Costs ~64Mi RAM/pod; requires egress hole to telemetry backend. |
@@ -83,3 +84,12 @@ Pod and Service CIDRs are **baked in at cluster creation** and painful to change
 * **Why?**
   1. **Security:** GitLab CI runners never need network access to the private GKE control plane (`10.10.250.0/28`). Flux pulls from inside the cluster out to GitLab over Door 3 (Cloud NAT).
   2. **State Reliability:** Broken Kubernetes CRDs inside Terraform state wedge `terraform plan/destroy`. Separating infrastructure (Terraform) from workloads (Flux) via **deterministic names** (`orders-app@<project>.iam.gserviceaccount.com`) eliminates circular dependencies.
+
+### ADR-06: The `dom-data` Tier — One Shared DB (orders+inventory), One Private DB (payments)
+
+* **Rule:** All databases live in a dedicated **`dom-data`** namespace, *outside* every domain's trust boundary and *outside* the Istio mesh (no sidecar injection). `orders` and `inventory` share `commerce-db` (schemas `sales` + `inventory`); `payments` owns `payments-db` alone.
+* **Why the shared schema for orders+inventory?**
+  1. **Atomicity:** "place order = decrement stock + insert order row" must be **one ACID transaction**. An HTTP `POST /reserve` hop between services cannot share a transaction boundary — you'd need two-phase commit for what a `BEGIN…COMMIT` gives free.
+  2. **Honest trade-off (shared fate):** `orders_rw` is granted `UPDATE` on `inventory.items` but *not* `INSERT/DELETE` — the shared-schema tension is intentional and debatable: coupling vs consistency. When `commerce-db` dies, **both** domains degrade — that blast radius is the lesson, not an accident.
+* **Why `payments` does NOT share:** payment records are the highest-sensitivity data; a separate instance means a compromised `orders_rw` role cannot read card flow, and `orders → payments-db:5432` is verifiably dropped at L4.
+* **Why no mesh on `dom-data`:** Istio `AuthorizationPolicy` enforces at the *server-side* Envoy — DB pods have none, and pgwire has no HTTP semantics anyway. The data tier is protected by `NetworkPolicy` (L4) alone; on GCP the identity gap is closed by **Cloud SQL Auth Proxy** + IAM DB auth, not by mesh mTLS.

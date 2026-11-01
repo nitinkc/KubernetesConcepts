@@ -8,7 +8,7 @@
 ## 1. Architecture Decision: Why Node Routes & Tags Cannot Do Per-Pod Egress Control
 
 | Architectural Reality | Implication for Design |
-|---|---|
+| --- | --- |
 | **Pods inherit their Node's routing table and network tags.** | When a Pod (`10.20.1.x`) sends a packet outside the cluster, the packet is **SNAT'd (masqueraded) to the Node's IP (`10.10.0.11`)** and routed by the **Node's kernel routing table**. Therefore, adding the GCP network tag `allowed-open-nat` to a node pool gives **every pod scheduled on that node** internet access at the VPC layer! |
 | **How do you restrict egress per-pod if the node has a default route?** | Use **two layers**: (1) VPC Route/Tag opens the door for the node pool (e.g., Flux `source-controller` needs `gitlab.com`), and (2) **Cilium `NetworkPolicy` (L4)** or **Istio `ServiceEntry` (`REGISTRY_ONLY` L7)** restricts which specific pods on that node can exit. |
 | **Why does DNS still resolve when the default internet route is deleted?** | Pod → CoreDNS (`10.30.0.10`) → Node `/etc/resolv.conf` → Docker internal DNS (`127.0.0.11` / GCP Metadata `169.254.169.254`). **DNS resolution is out-of-band from TCP routing!** A pod can resolve `example.com` to `93.184.215.14` and then immediately hang on `curl` because there is no route to `93.184.215.14`. |
@@ -86,6 +86,7 @@ probe_node acme-m02 https://example.com || echo "EXPECTED: Internet egress is co
 ### Step 4: Open the 4 Outbound Doors One by One
 
 #### Door 1: Private Services / Local Registry (`10.10.0.200:5000`)
+
 Even with `0.0.0.0/0` deleted, `10.10.0.200` is reachable on `acme-main` (just as `199.36.153.8/30` `private.googleapis.com` is reachable on GCP via Door 1):
 
 ```bash
@@ -94,6 +95,7 @@ probe_node acme-m02 http://10.10.0.200:5000/v2/
 ```
 
 #### Door 2: Exact `/32` Partner VIP Route (`$EX_IP/32`)
+
 Suppose `acme-m02` must call **only** `example.com` (`$EX_IP/32`) and nothing else on the internet:
 
 ```bash
@@ -106,6 +108,7 @@ probe_node acme-m02 https://www.google.com || echo "Blocked! Only the /32 VIP ha
 ```
 
 #### Door 3: Tag-Gated Open NAT (`allowed-open-nat=true` on `acme-m03` Only)
+
 In Lab 02, we labeled `acme-m03` with `allowed-open-nat=true`. In GCP, a tag-scoped route `0.0.0.0/0` applies **only** to nodes with that tag:
 
 ```bash
@@ -121,6 +124,7 @@ probe_node acme-m03 https://www.google.com    # Expected: 200!
 ```
 
 #### Door 4: Hybrid / On-Prem Route via `vpc-router` (`10.10.1.0/28`)
+
 Because `scripts/routes.sh` added `10.10.1.0/28 via 10.10.0.250` on all nodes, traffic to `acme-ops` (`10.10.1.3`) uses the internal router regardless of whether `default` exists:
 
 ```bash
@@ -133,17 +137,19 @@ docker exec acme-m02 ping -c 2 10.10.1.3
 ## 4. Summary Verification Table (Your Evidence Sheet)
 
 | Outbound Flow | Node `acme-m02` (No Default Route) | Node `acme-m03` (`allowed-open-nat=true`) | Door Used | GCP P3/P8 Twin |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `http://10.10.0.200:5000/v2/` | `200` | `200` | **Door 1** | PGA + `199.36.153.8/30` + Private DNS |
 | `https://example.com` (`$EX_IP/32`) | `200` | `200` | **Door 2** | `google_compute_route.public_services` (`/32`) |
 | `https://www.google.com` (Any IP) | `000` (Dropped) | `200` | **Door 3** | Tag `allowed-open-nat` + Cloud NAT |
 | `ping 10.10.1.3` (`acme-ops`) | `0% loss` | `0% loss` | **Door 4** | Cloud Router BGP + HA VPN |
+| `commerce-db` / `payments-db` pods → *anywhere* | `000` | `000` | **None — by design** | Cloud SQL never egresses; the seed Job's `postgres:16-alpine` pull is a Door-1 mirror candidate (like `dockerhub-mirror`) |
 
 ---
 
 ## 5. Deliberate Break & Triage Drills
 
 ### Drill 1: The Un-Preloaded Image Pull Trap (`ImagePullBackOff`)
+
 What happens when a pod is scheduled onto `acme-m02` (no default route) requesting an image from Docker Hub (`alpine:3.19`) that wasn't preloaded or mirrored in Door 1?
 
 ```bash
@@ -156,6 +162,7 @@ kubectl describe pod broken-pull | tail -n 8
 # Clean up
 kubectl delete pod broken-pull --wait=false
 ```
+
 > **Lesson:** Image pulls are a **node-level egress dependency**. On GKE with `delete_default_routes_on_create = true`, pulling from `docker.io` fails with this exact `ImagePullBackOff` unless you configure **Artifact Registry Remote Repository (`dockerhub-mirror`)** over Door 1!
 
 ---

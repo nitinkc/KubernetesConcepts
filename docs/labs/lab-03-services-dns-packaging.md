@@ -1,17 +1,21 @@
 # Lab 03 · Services, CoreDNS & Reusable Helm Packaging Across 3 Domains
 
 > **Core Lesson:** Understand how a virtual `ClusterIP` (`10.30.0.0/24`) is rewritten via kernel DNAT (`port 80` → `targetPort 8080`), how CoreDNS `ndots:5` search domains work, and how to package three domains (`orders`, `payments`, `inventory`) using **one reusable Tier-2 Helm chart** (`acme-microservice`).  
-> **GCP Twin:** Phase P7a–P7c (`helm-charts/acme-microservice`, `dom-orders`, `dom-payments`, `dom-inventory`, Workload Identity KSA annotations).
+> **GCP Twin:** Phase P7a–P7c (`helm-charts/acme-microservice`, `dom-orders`, `dom-payments`, `dom-inventory`, Workload Identity KSA annotations) plus the data tier (`commerce-sql` + `payments-sql` Cloud SQL, PSA `100.64.0.0/20`).
+>
+> **The Acme Store scenario:** `orders` (Go) is the public API; `inventory` (Node) and `payments` (Python) are internal. `orders` checks stock over HTTP, then **decrements stock + writes the order row in the shared `commerce-db`** in one SQL transaction, then calls `payments /charge` — which writes to its **own** `payments-db`. A declined payment triggers a *compensating transaction* that restores stock. Both Postgres databases live in a dedicated **`dom-data`** namespace — a shared schema for orders+inventory is an intentional design tension you will defend in Lab 05.
 
 ---
 
 ## 1. Architecture Decision: One Reusable Chart vs Copy-Pasted Manifests
 
 | Decision Point | Choice Made | Why It Matters |
-|---|---|---|
+| --- | --- | --- |
 | **Why build ONE Helm chart (`acme-microservice`) for 3 different domains?** | Tier-2 platform chart parameterized by `domain`, `image.*`, `serviceAccount.gsaEmail`, and `sidecars.*` toggles. | In an enterprise with 50 microservices, copy-pasting Deployment YAML means 50 PRs whenever you upgrade Fluent Bit, change OTel configs, or add security contexts. One Tier-2 chart enforces platform standards everywhere. |
 | **Why separate Service `port: 80` from Container `targetPort: 8080`?** | Callers dial standard HTTP (`http://payments.dom-payments` on port `80`), while containers run as **non-root user (`UID > 1000`)** on unprivileged port `8080`. | Running containers as root just to bind port 80 violates Pod Security Standards (`restricted`). **Crucial Nuance:** Kernel DNAT happens *before* `NetworkPolicy` evaluation, so L4 policies in Lab 05 must allow **Pod `targetPort: 8080`**, not Service `port: 80`! |
 | **Why observe the flat network first?** | Deploy all 3 domains before applying `NetworkPolicy`. | Proves that Kubernetes **allows every namespace to call every namespace by default** (`payments` can call `inventory`), which is why multi-tenant clusters require explicit L4 + L7 guards. |
+| **Why a separate `dom-data` namespace for the databases?** | Postgres is platform data, not a domain workload. `commerce-db` is shared by `orders`+`inventory`; `payments-db` is payments-private. | The flat network means **`orders` can open a raw TCP socket to `payments-db:5432` right now** — data-tier lateral movement, a worse leak than HTTP calls between services. This is the hook that makes Lab 05's `5432` policies matter. |
+| **Why does `orders` write `inventory.items` directly instead of calling an inventory API?** | The stock decrement and the order row must commit **atomically** — a single transaction on `commerce-db`. The payments call happens *outside* that tx and gets a compensating transaction on failure. | A cross-service "reserve then commit" API can't share one ACID transaction. The shared-schema write is a deliberate trade-off (the `orders_rw` role can `UPDATE` stock but not `INSERT` items) — and the payments side shows what happens when you *don't* share a DB: you need a saga. |
 
 ---
 
@@ -40,25 +44,33 @@ sequenceDiagram
 
 ## 3. Step-by-Step Hands-On Build
 
-### Step 1: Preload & Push Base Images to Your Local Registry (`10.10.0.200:5000`)
+### Step 1: Build the 3 Domain Apps & Preload Images
 
-We preload `nginxinc/nginx-unprivileged:alpine` (listens on `8080`, includes `wget`) and `curlimages/curl` into both the Minikube nodes **and** our local registry (`10.10.0.200:5000`) so they survive when we cut internet access in Lab 04:
+The domain apps live in this repo under `apps/` — three tiny services, three different languages, one shared contract (`/healthz`, `/readyz`, `/work`, plus the real endpoints). Build them, plus pull the sidecar/DB/base images, and load everything into the Minikube nodes **and** your local registry (`10.10.0.200:5000`) so they survive when we cut internet access in Lab 04:
 
 ```bash
-# Pull images on host
-docker pull nginxinc/nginx-unprivileged:alpine
+# From the repo root — build the three domain images
+docker build -t acme/orders:v1    apps/orders      # Go: POST /orders saga
+docker build -t acme/inventory:v1 apps/inventory   # Node: GET /items on commerce-db
+docker build -t acme/payments:v1  apps/payments    # Python: POST /charge on payments-db
+
+# Pull base/sidecar/DB images on host
+docker pull nginxinc/nginx-unprivileged:alpine   # probe/debug pods
 docker pull curlimages/curl:latest
+docker pull postgres:16-alpine                   # commerce-db + payments-db + seed Job
 docker pull fluent/fluent-bit:3.2
 docker pull otel/opentelemetry-collector:0.114.0
 
-# Load into Minikube nodes
-minikube image load -p acme nginxinc/nginx-unprivileged:alpine
-minikube image load -p acme curlimages/curl:latest
-minikube image load -p acme fluent/fluent-bit:3.2
-minikube image load -p acme otel/opentelemetry-collector:0.114.0
+# Load everything into Minikube nodes
+for img in acme/orders:v1 acme/inventory:v1 acme/payments:v1 \
+           nginxinc/nginx-unprivileged:alpine curlimages/curl:latest \
+           postgres:16-alpine fluent/fluent-bit:3.2 otel/opentelemetry-collector:0.114.0; do
+  minikube image load -p acme "$img"
+done
 
-# Also push our microservice image into the local registry (10.10.0.200:5000) via probe/host
-docker tag nginxinc/nginx-unprivileged:alpine localhost:5000/acme/service:v1
+# On GCP these same images come from Artifact Registry — the local registry at
+# 10.10.0.200:5000 is its twin (Door 1, Lab 04)
+docker tag acme/orders:v1 localhost:5000/acme/orders:v1
 ```
 
 ---
@@ -75,7 +87,7 @@ apiVersion: v2
 name: acme-microservice
 description: Tier-2 Reusable Platform Helm Chart for Acme Labs Domains
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "1.0.0"
 EOF
 
@@ -91,6 +103,12 @@ service:
   targetPort: 8080
 serviceAccount:
   gsaEmail: ""   # On GCP: orders-app@my-devops-journey-502420.iam.gserviceaccount.com
+env: {}            # plain env vars, e.g. PAYMENTS_URL
+envFromSecrets: [] # e.g. [db-creds] -> envFrom secretRef, injects DATABASE_URL
+probes:
+  readiness:
+    enabled: false
+    path: /readyz
 resources:
   requests:
     cpu: 50m
@@ -156,6 +174,28 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - containerPort: {{ .Values.service.targetPort }}
+          {{- if .Values.env }}
+          env:
+            {{- range $k, $v := .Values.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- end }}
+          {{- if .Values.envFromSecrets }}
+          envFrom:
+            {{- range .Values.envFromSecrets }}
+            - secretRef:
+                name: {{ . }}
+            {{- end }}
+          {{- end }}
+          {{- if .Values.probes.readiness.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: {{ .Values.service.targetPort }}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
 EOF
@@ -164,27 +204,81 @@ EOF
 helm lint ~/acme-k8s-lab/charts/acme-microservice
 ```
 
+> **Shortcut:** this exact chart is also vendored in the repo at `charts/acme-microservice/` — Labs 09 and 10 consume it from there.
+
 ---
 
-### Step 3: Deploy All 3 Isolated Domains (`orders`, `payments`, `inventory`)
+### Step 3: Deploy the Data Tier (`dom-data`) — 2 Postgres StatefulSets + Seed Job
+
+The databases ship as plain manifests in `apps/data/` (a StatefulSet each — the textbook stateful workload — plus per-domain DSN Secrets and an idempotent seed Job). **Order matters:** namespaces first, then Secrets, then the DBs, then the seed.
+
+```bash
+# From the repo root
+kubectl apply -f apps/data/namespace.yml
+
+# Pre-create the domain namespaces so their db-creds Secrets can exist
+for d in orders payments inventory; do
+  kubectl create ns "dom-$d" --dry-run=client -o yaml | kubectl apply -f -
+done
+
+kubectl apply -f apps/data/secrets.yml                       # db-auth + per-domain DATABASE_URL
+kubectl apply -f apps/data/commerce-db/statefulset.yml
+kubectl apply -f apps/data/payments-db/statefulset.yml
+kubectl -n dom-data rollout status statefulset/commerce-db --timeout=120s
+kubectl -n dom-data rollout status statefulset/payments-db --timeout=120s
+
+# Seed: creates roles/schemas/tables + 3 demo items (idempotent — safe to re-run)
+kubectl apply -f apps/data/seed-job.yml
+kubectl -n dom-data wait --for=condition=complete job/db-seed --timeout=120s
+kubectl -n dom-data logs job/db-seed
+
+# Peek inside: the shared commerce-db holds BOTH schemas
+kubectl -n dom-data exec commerce-db-0 -- psql -U postgres -d commerce \
+  -c '\dn' -c 'SELECT id,sku,stock,price FROM inventory.items'
+```
+
+> **GCP Twin:** these two StatefulSets are `commerce-sql` and `payments-sql` — private-IP Cloud SQL Postgres reached over Private Services Access (`100.64.0.0/20`), with the Cloud SQL Auth Proxy riding as a 5th sidecar in each domain pod.
+
+---
+
+### Step 4: Deploy All 3 Isolated Domains (`orders`, `payments`, `inventory`)
 
 ```bash
 kubectl create ns observability --dry-run=client -o yaml | kubectl apply -f -
 
-for d in orders payments inventory; do
-  helm upgrade --install "$d" ~/acme-k8s-lab/charts/acme-microservice \
-    --namespace "dom-$d" --create-namespace \
-    --set domain="$d" \
-    --set serviceAccount.gsaEmail="${d}-app@my-devops-journey-502420.iam.gserviceaccount.com"
-done
+# orders — the public saga driver: needs downstream URLs + shared-DB creds
+helm upgrade --install orders ~/acme-k8s-lab/charts/acme-microservice \
+  --namespace dom-orders --set domain=orders \
+  --set image.repository=acme/orders --set image.tag=v1 \
+  --set env.PAYMENTS_URL=http://payments.dom-payments \
+  --set env.INVENTORY_URL=http://inventory.dom-inventory \
+  --set envFromSecrets="{db-creds}" \
+  --set probes.readiness.enabled=true \
+  --set serviceAccount.gsaEmail="orders-app@my-devops-journey-502420.iam.gserviceaccount.com"
 
-# Verify all pods, Services, and EndpointSlices across the 3 domains
-kubectl get pods,svc,endpointslices -n dom-orders -n dom-payments -n dom-inventory -o wide
+# payments — own private DB
+helm upgrade --install payments ~/acme-k8s-lab/charts/acme-microservice \
+  --namespace dom-payments --set domain=payments \
+  --set image.repository=acme/payments --set image.tag=v1 \
+  --set envFromSecrets="{db-creds}" \
+  --set probes.readiness.enabled=true \
+  --set serviceAccount.gsaEmail="payments-app@my-devops-journey-502420.iam.gserviceaccount.com"
+
+# inventory — reads/writes the shared commerce-db
+helm upgrade --install inventory ~/acme-k8s-lab/charts/acme-microservice \
+  --namespace dom-inventory --set domain=inventory \
+  --set image.repository=acme/inventory --set image.tag=v1 \
+  --set envFromSecrets="{db-creds}" \
+  --set probes.readiness.enabled=true \
+  --set serviceAccount.gsaEmail="inventory-app@my-devops-journey-502420.iam.gserviceaccount.com"
+
+# Verify all pods, Services, and EndpointSlices across domains + data tier
+kubectl get pods,svc,endpointslices -n dom-orders -n dom-payments -n dom-inventory -n dom-data -o wide
 ```
 
 ---
 
-### Step 4: Verify the Call Graph & Observe the "Flat Network" Problem
+### Step 5: Verify the Call Graph & Observe the "Flat Network" Problem
 
 Define the `call` helper function and test East-West traffic across namespaces:
 
@@ -193,19 +287,45 @@ call() {
   kubectl -n "$1" exec "deploy/$2" -c app -- sh -c "wget -O /dev/null -T 3 $3 2>&1 | tail -n1"
 }
 
-# Intended calls (orders -> payments, orders -> inventory)
-call dom-orders orders http://payments.dom-payments/
-call dom-orders orders http://inventory.dom-inventory/
+# Intended HTTP calls (orders -> payments, orders -> inventory)
+call dom-orders orders http://payments.dom-payments/work
+call dom-orders orders http://inventory.dom-inventory/work
 
 # Unintended call (payments -> inventory) — WORKS right now because K8s is flat by default!
-call dom-payments payments http://inventory.dom-inventory/
+call dom-payments payments http://inventory.dom-inventory/work
+
+# And the data tier is flat TOO — a raw TCP socket to the "private" DB succeeds:
+kubectl -n dom-orders exec deploy/orders -c app -- nc -zv -w3 payments-db.dom-data 5432
+# -> payments-db.dom-data (10.30.x.x:5432) open   ← orders can reach payments' DB! (Lab 05 fixes this)
 ```
 
-**Expected Output for all 3:** `remote file exists` (HTTP 200).
+**Expected Output for the 3 HTTP calls:** `remote file exists` (HTTP 200).
+
+#### Golden Path: the full order saga, end to end
+
+```bash
+# Place an order for 2x WIDGET-1 (item 1 @ 19.99) — inside the orders pod
+kubectl -n dom-orders exec deploy/orders -c app -- \
+  wget -qO- --post-data='{"item_id":1,"qty":2}' \
+  --header='Content-Type: application/json' http://localhost:8080/orders
+# -> {"order_id":1,"status":"confirmed","amount":39.98}
+
+# Stock dropped by 2 (orders reduced inventory — via the SHARED db):
+kubectl -n dom-orders exec deploy/orders -c app -- \
+  wget -qO- http://inventory.dom-inventory/items/1
+# -> {"id":1,...,"stock":48,"price":19.99}
+
+# Decline drill: GIZMO-3 costs 99.99 — amounts ending .99 are always declined
+kubectl -n dom-orders exec deploy/orders -c app -- \
+  wget -qO- --post-data='{"item_id":3,"qty":1}' \
+  --header='Content-Type: application/json' http://localhost:8080/orders || true
+# -> {"order_id":2,"status":"cancelled","reason":"payment declined","compensated":true}
+# ...and item 3's stock is back where it was: the compensating transaction ran.
+```
 
 ---
 
-### Step 5: Inspect CoreDNS `ndots:5` Search Expansion
+### Step 6: Inspect CoreDNS `ndots:5` Search Expansion
 
 Why did `http://payments.dom-payments/` resolve without `.svc.cluster.local`? Inspect `/etc/resolv.conf` inside `orders`:
 
@@ -214,6 +334,7 @@ kubectl -n dom-orders exec deploy/orders -c app -- cat /etc/resolv.conf
 ```
 
 **Output:**
+
 ```text
 nameserver 10.30.0.10
 search dom-orders.svc.cluster.local svc.cluster.local cluster.local
@@ -227,6 +348,7 @@ options ndots:5
 ## 4. Deliberate Break & Triage Drills
 
 ### Drill 1: The `port` vs `targetPort` Mismatch (`Connection refused`)
+
 ```bash
 # Patch payments Service targetPort to 9999 (nobody listening on 9999 inside the pod)
 kubectl -n dom-payments patch svc payments --type='json' -p='[{"op":"replace","path":"/spec/ports/0/targetPort","value":9999}]'
@@ -240,6 +362,7 @@ call dom-orders orders http://payments.dom-payments/
 ```
 
 ### Drill 2: Selector Mismatch (Empty `EndpointSlice`)
+
 ```bash
 # Break the Service selector so it matches 0 pods
 kubectl -n dom-payments patch svc payments -p '{"spec":{"selector":{"app":"wrong-label"}}}'
@@ -337,7 +460,7 @@ kubectl -n dom-orders delete secret app-secrets
 
 ## 5. Readiness Gate G-03
 
-1. What are three concrete risks of leaving the Kubernetes network flat across `dom-orders`, `dom-payments`, and `dom-inventory`? *(1. Lateral movement if one pod is compromised; 2. Accidental coupling where `inventory` calls `payments` directly; 3. Any pod in any namespace can hit internal endpoints without identity verification).*
+1. What are three concrete risks of leaving the Kubernetes network flat across `dom-orders`, `dom-payments`, `dom-inventory`, and `dom-data`? *(1. Lateral movement if one pod is compromised; 2. Accidental coupling where `payments` calls `inventory` directly; 3. **Any pod can open a raw socket to `payments-db:5432`** — the flat network includes your data tier, so "private DB" is currently just a naming convention).*
 2. How do you distinguish a **broken Service `targetPort`** from a **firewall drop** in 1 second? *(`Connection refused` = packet reached the pod, nothing listening on that port; `Connection timed out` = packet silently dropped by firewall/NetworkPolicy).*
 
 ---

@@ -10,7 +10,7 @@ Companion deck: `acme-labs-design.html` (diagrams + high-level design).
 ## 0. Assumptions (change these first if wrong)
 
 | # | Assumption | If wrong |
-|---|---|---|
+| --- | --- | --- |
 | A1 | You use **gitlab.com Free** (not self-managed) | Change the OIDC issuer in the WIF provider to your host |
 | A2 | Your Google account may have **no Organization** (personal gmail) → no Folders, no org policies | `bootstrap` creates **projects only**; the "folder" level of the corporate diagram is simulated with naming. If you do have an org, add `google_folder` resources (see P1 note) |
 | A3 | Existing project `my-devops-journey-502420` = **non-prod (np)**. A second, almost-empty project = **prod (p)** to prove permission boundaries | Skip prod; you lose the protected-branch lab (P2) |
@@ -22,10 +22,11 @@ Companion deck: `acme-labs-design.html` (diagrams + high-level design).
 ## 1. Architecture decisions (with reasons — these are the "why" you should be able to defend)
 
 ### D1 — Can ONE cluster serve 3 isolated domains? **Yes.**
+
 A GKE cluster lives in exactly **one VPC**, so you cannot give three domains three VPCs without three clusters. But "domain isolation" does not need VPCs. Use layered isolation:
 
 | Layer | Mechanism | Stops what |
-|---|---|---|
+| --- | --- | --- |
 | Cloud IAM | One GSA per domain via Workload Identity | A pod using another domain's cloud permissions |
 | L3/L4 | Kubernetes `NetworkPolicy` (GKE **Dataplane V2**) default-deny per namespace | Pod→pod traffic not explicitly allowed |
 | L7 identity | Istio mTLS + `AuthorizationPolicy` on SPIFFE identity (SA) | A permitted network path used by the wrong caller |
@@ -35,36 +36,42 @@ A GKE cluster lives in exactly **one VPC**, so you cannot give three domains thr
 If you ever need *real* VPC separation: three clusters (or GKE multi-network / Shared VPC with 3 subnets). That is stretch **S6**.
 
 ### D2 — Cluster flavour
+
 GKE **Standard, zonal, private nodes, Dataplane V2, Workload Identity, Gateway API**. Zonal keeps you on the free-tier management-fee credit (one zonal/Autopilot cluster per billing account). **Spot** `e2-standard-2` ×2–3 nodes. Standard (not Autopilot) because you want to see node tags, routes, NAT and pod ranges — Autopilot hides them.
 
 ### D3 — Where do "service accounts + cross-stack values" live? (your Consul/other question)
+
 - **Identities are deterministic names**, not looked-up values: `pipeline-np@…`, `orders-app@…`. A name you can compute needs no lookup service.
 - **Cross-stack outputs** (VPC self-link, subnet names): use **GCS remote state + `terraform_remote_state`**. Reason: zero extra infra, works with GitLab shared runners, IAM-protected.
 - **Consul = optional stretch S4.** A private Consul can't be reached by gitlab.com shared runners; you'd need a self-hosted runner on the free-tier e2-micro in the VPC. Great learning (it forces you through the network doors), poor *day-one* choice.
 - Secrets (later): **Secret Manager** (free tier 6 active versions) + External Secrets Operator. Don't run Vault for a lab.
 
 ### D4 — Mesh / sidecars
+
 Istio **sidecar mode** (deliberately; ambient mode would remove the sidecars you want to study). Per application pod:
 
 | Container | Role | Log path to Cloud Logging |
-|---|---|---|
+| --- | --- | --- |
 | `app` | Your service, JSON logs to stdout **and** a file | stdout → GKE node agent → `_Default` bucket |
 | `istio-proxy` (Envoy) | mTLS, authz, L7 metrics | JSON access log to stdout → same path |
 | `otel-collector` | OTLP receiver → `googlecloud` exporter (logs, traces, metrics) | Direct API call, via Workload Identity |
 | `fluent-bit` | Tails the app's log **file** on a shared `emptyDir` | `stackdriver` output, direct API call, via Workload Identity |
 
 Three patterns for the same goal (stdout agent / file-tail sidecar / OTLP sidecar) — you'll see why enterprises use each.
-Future sidecar: Cloud SQL Auth Proxy (S1).
+Cloud SQL Auth Proxy rides as the **5th sidecar** in domain pods on GCP (P7f) — it restores "who is calling" via IAM *inside* the Postgres handshake, which the mesh cannot see on raw TCP.
 
 ### D5 — Central logging
+
 One **log bucket `central-app-logs`** (Log Analytics enabled) fed by a **Log Router sink** filtered on the three domain namespaces; an exclusion on `_Default` avoids storing logs twice. Cloud Logging free allotment ≈ 50 GiB/project/month (verify current figure). Domain separation inside the central bucket is by label/namespace, not by bucket.
 
 ### D6 — GitLab tiering and where Terraform modules live
+
 Mirrors your corporate layout. Modules in Tier 1 (`platform/terraform-modules`), consumed by git tag (`?ref=v0.1.0`) so Tier 2/3 never copy code. CI templates in Tier 1 (`platform/ci-templates`). Group-level CI variables inherit downward.
 
-### D7 — Auth from GitLab to GCP: **Workload Identity Federation, no JSON keys** (same "no SA keys" guardrail as the corporate screenshot).
+### D7 — Auth from GitLab to GCP: **Workload Identity Federation, no JSON keys** (same "no SA keys" guardrail as the corporate screenshot)
 
 ### D8 — Flux owns Kubernetes objects; Terraform owns GCP objects
+
 Terraform never `kubectl apply`s. CI never needs access to the Kubernetes API → the GKE control-plane endpoint can be locked to your own IP. The only handoff between the two is **names** (`gke-nodes`, `orders-app`, ns `dom-orders`).
 
 ---
@@ -72,25 +79,26 @@ Terraform never `kubectl apply`s. CI never needs access to the Kubernetes API �
 ## 2. Naming + IPAM (decide *before* writing any Terraform)
 
 | Thing | Value |
-|---|---|
+| --- | --- |
 | np project | `my-devops-journey-502420` |
 | prod project | `acme-labs-p-<suffix>` (new) |
 | GitLab root group | `acme-labs-<handle>` (must be globally unique — write it as `$ROOT` below) |
 | VPC | `acme-main` (custom mode) |
 | Cluster | `acme-np` (zonal, `us-central1-a`) |
-| Namespaces | `dom-orders`, `dom-payments`, `dom-inventory` |
+| Namespaces | `dom-orders`, `dom-payments`, `dom-inventory`, `dom-data` (Postgres tier, **no mesh injection**) |
 | KSA → GSA | `orders`→`orders-app`, `payments`→`payments-app`, `inventory`→`inventory-app` |
+| Cloud SQL | `commerce-sql` (shared: orders + inventory schemas), `payments-sql` (payments-private) |
 | Node tags | `gke-node`, `allowed-open-nat`, `iap-ssh` |
 
 | Range | CIDR | Purpose | Corporate analogue |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `gke-main` nodes | `10.10.0.0/24` | Node primary IPs | Enterprise 10.x |
 | `gke-pods` (secondary) | `10.20.0.0/20` | Pod IPs (with `max_pods_per_node=64` → /25 per node → 32 nodes max) | GKE pod CIDR ≥ /22 |
 | `gke-svcs` (secondary) | `10.30.0.0/24` | ClusterIPs | GKE svc CIDR |
 | `ops` | `10.10.1.0/28` | Bastion/test VM | — |
 | GKE master | `10.10.250.0/28` | Private control plane (/28 mandatory) | 10.3.82.0/28 |
 | `proxy-only-subnet` | `10.10.254.0/23` | Envoy pool for internal L7 LBs (`REGIONAL_MANAGED_PROXY`) | 5.1.0.0/23 |
-| PSA (stretch) | `100.64.0.0/20` | Cloud SQL private services access | 100.64.0.0/16 |
+| PSA | `100.64.0.0/20` | Cloud SQL private services access (commerce-sql + payments-sql) | 100.64.0.0/16 |
 | `onprem-sim` (stretch) | `192.168.100.0/24` | Second VPC faking an on-prem site | den3 / NCC spokes |
 
 Rules to internalize: ranges must not overlap with **anything you may ever connect** (peering, VPN, NCC); pod/service secondary ranges are painful to change after cluster creation; PSA range ≠ anything routable on-prem.
@@ -99,7 +107,7 @@ Rules to internalize: ranges must not overlap with **anything you may ever conne
 
 ## 3. GitLab layout (screenshot 2, renamed)
 
-```
+```text
 acme-labs-<handle>/                       ← root group  (≙ corporate-applications)
 ├─ platform/                              ← TIER 1  "city power grid & roads"
 │  ├─ bootstrap/                          projects, APIs, state buckets, WIF pool, pipeline SAs
@@ -110,7 +118,7 @@ acme-labs-<handle>/                       ← root group  (≙ corporate-applica
 │  ├─ ci-templates/                       shared .gitlab-ci includes
 │  └─ contract-bus/        (optional S4)  Consul on e2-micro
 ├─ domain-shared/                         ← TIER 2  "shared utilities & blueprints"
-│  ├─ shared-services/                    (later) Cloud SQL, Pub/Sub, Memorystore
+│  ├─ shared-services/                    (P7f) Cloud SQL commerce-sql + payments-sql, (later) Pub/Sub, Memorystore
 │  └─ configurations/
 │     ├─ helm-charts/                     acme-microservice chart (OCI-published)
 │     └─ flux-releases/                   GitOps repo Flux watches
@@ -123,7 +131,7 @@ acme-labs-<handle>/                       ← root group  (≙ corporate-applica
 **Group-level CI/CD variables (set once on the root, inherited everywhere):**
 
 | Variable | Scope | Protected? |
-|---|---|---|
+| --- | --- | --- |
 | `WIF_PROVIDER` (`projects/<NUM>/locations/global/workloadIdentityPools/gitlab-pool/providers/gitlab-oidc`) | root | no |
 | `GCP_PROJECT_NP`, `GCP_REGION`, `TF_STATE_BUCKET_NP` | root | no |
 | `SA_NP`, `SA_P_RO` | root | no |
@@ -149,7 +157,7 @@ done
 
 ## 4. Order of implementation — and the logic behind it
 
-```
+```text
 P0 tooling/groups
  └ P1 bootstrap (local)        ← creates identity + state; nothing else can run in CI without it
     └ P2 CI + WIF              ← from now on every change is a merge request
@@ -162,6 +170,7 @@ P0 tooling/groups
                       └ P9 internal Gateway (proxy-only subnet)
                          └ P10 stretch menu (PSA/Cloud SQL, hybrid VPN, node-pool-per-domain, Consul …)
 ```
+
 **Why close the default route so late (P8)?** A deleted default route breaks node bootstrap, Flux→GitLab, chart downloads and Docker Hub pulls. You first build everything *with training wheels*, record every flow, then remove the wheels and repair each break deliberately. That is where the hidden nuances surface.
 
 Effort guide at several hrs/week: P0–P2 ≈ 1 week; P3–P4 ≈ 1 week; P5–P7 ≈ 1.5 weeks; P8–P9 ≈ 1 week; stretch as desired.
@@ -180,6 +189,7 @@ gcloud version; terraform version; kubectl version --client; helm version; flux 
 gcloud billing budgets create --billing-account=<ID> --display-name=acme-labs \
   --budget-amount=20USD --threshold-rule=percent=0.5 --threshold-rule=percent=1.0
 ```
+
 Hints: install `istioctl` (for `istioctl analyze`, `istioctl proxy-status`) and `jq`. Create groups with §3 script.
 **Verify:** `curl -s -H "PRIVATE-TOKEN: $GL_PAT" https://gitlab.com/api/v4/groups/$ROOT | jq .full_path`
 
@@ -307,6 +317,7 @@ output "wif_provider" { value = google_iam_workload_identity_pool_provider.gitla
 output "pipeline_sa"  { value = { for k, v in google_service_account.pipeline : k => v.email } }
 output "state_buckets" { value = { np = google_storage_bucket.state_np.name, p = google_storage_bucket.state_p.name } }
 ```
+
 ```bash
 cd platform/bootstrap && terraform init && terraform apply \
   -var project_id=my-devops-journey-502420 -var prod_project_id=acme-labs-p-$RANDOM \
@@ -320,6 +331,7 @@ api -X POST https://gitlab.com/api/v4/groups/$GID/variables \
 api -X POST https://gitlab.com/api/v4/groups/$GID/variables \
   -F key=SA_P -F value="pipeline-p@<prod>.iam.gserviceaccount.com" -F protected=true
 ```
+
 Hints: if `google_project` fails on billing, verify `billing_account` and your `roles/billing.user`. Org policy 412? That's a constraint, not a Terraform bug.
 **Verify:** `gcloud iam workload-identity-pools providers describe gitlab-oidc --workload-identity-pool=gitlab-pool --location=global --format='yaml(attributeCondition,attributeMapping)'`
 **Gate G1:** you can explain, without notes, why `pipeline-p`'s principalSet cannot be matched by a feature-branch token.
@@ -376,14 +388,18 @@ tf:apply:
   rules: [{ if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH', when: manual }]
   script: [terraform apply -input=false plan.tfplan]
 ```
+
 Consumer repo `.gitlab-ci.yml`:
+
 ```yaml
 include:
   - project: acme-labs-yourhandle/platform/ci-templates
     file: terraform.yml
 ```
+
 Hints: in `platform/terraform-modules` → Settings → CI/CD → *Job token permissions* → add the groups that consume it. Tag modules (`git tag v0.1.0`) and pin `?ref=`. Shared runners have a monthly minute quota (≈400 on Free; verify) — keep jobs lean, cache nothing fancy.
 **Break-it exercises**
+
 1. Run a job on a **feature branch** with `TF_SA=$SA_P`: STS exchange must be **denied**. Read the error and map it to the `root_group_ref` attribute.
 2. Switch `TF_SA` to `$SA_P_RO`: succeeds with read-only (the "feature branches get read-only plan view" behaviour).
 3. Protect `main` ⇒ `ref_protected=true` ⇒ `SA_P` works from `main` only.
@@ -395,6 +411,7 @@ Hints: in `platform/terraform-modules` → Settings → CI/CD → *Job token per
 
 **Goal:** custom VPC with IPAM from §2, PGA, Cloud NAT with 2 static IPs, tag-scoped routes, firewall, private DNS for Google APIs. A variable `training_wheels` keeps a normal default route until P8.
 **Nuances revealed (write each down in your own words):**
+
 - Cloud NAT only translates traffic whose route's next hop is `default-internet-gateway`.
 - `delete_default_routes_on_create` is a **create-time** flag — toggling later forces VPC replacement; so manage your own default route as a resource instead.
 - Network tags / SAs are **node-level**: pods ride on the node's identity.
@@ -523,21 +540,27 @@ output "network_self_link" { value = google_compute_network.main.self_link }
 output "subnet_name"       { value = google_compute_subnetwork.gke_main.name }
 output "network_name"      { value = google_compute_network.main.name }
 ```
+
 Hints:
+
 - Use a throwaway **IAP-only VM** in `ops` (no external IP, tag `iap-ssh`) to test doors:
+
   ```bash
   gcloud compute instances create probe --zone us-central1-a --machine-type e2-micro \
     --subnet ops --no-address --tags iap-ssh,allowed-open-nat --image-family debian-12 --image-project debian-cloud
   gcloud compute ssh probe --zone us-central1-a --tunnel-through-iap -- curl -sI https://example.com
   ```
+
   Remove the `allowed-open-nat` tag and re-test: with `training_wheels=true` it still works (tw route); after P8 it won't. That contrast **is** the lesson.
 - Network Intelligence → *Connectivity Tests* (`gcloud network-management connectivity-tests create …`) will tell you which route/firewall decides a packet.
 **Verify:**
+
 ```bash
 gcloud compute routes list --filter="network:acme-main" \
   --format="table(name,destRange,priority,nextHopGateway.basename(),tags.list())"
 gcloud compute routers get-nat-mapping-info acme-router --region us-central1
 ```
+
 **Gate G3:** predict the result of curling (a) `storage.googleapis.com`, (b) `example.com` from a tagged and an untagged VM, in both `training_wheels` states — then confirm.
 
 ---
@@ -615,11 +638,13 @@ resource "google_artifact_registry_repository" "dockerhub" {
   remote_repository_config { docker_repository { public_repository = "DOCKER_HUB" } }
 }
 ```
+
 ```bash
 gcloud container clusters get-credentials acme-np --zone us-central1-a --project my-devops-journey-502420
 kubectl get nodes -o wide                         # INTERNAL-IP in 10.10.0.0/24, no EXTERNAL-IP
 kubectl get pods -A -o wide | head                # pod IPs in 10.20.0.0/20
 ```
+
 Hints: spot nodes can vanish — fine for a lab. If nodes don't become Ready, it's almost always egress (P3) — check NAT logs / route list.
 **Nuances revealed:** why `enable_private_endpoint=false` + authorized networks (so *you* can `kubectl`, nobody else can); why nodes have no external IP yet can still pull images (NAT or PGA?).
 **Gate G4:** you can say which door each of these uses: `gke.gcr.io` system image, `docker.io/istio/pilot`, `registry.k8s.io`, the AR mirror.
@@ -637,8 +662,10 @@ flux bootstrap gitlab --owner=$ROOT/domain-shared/configurations --repository=fl
   --branch=main --path=clusters/np --token-auth --personal=false
 flux get kustomizations -A
 ```
+
 Repo layout:
-```
+
+```text
 flux-releases/
 ├─ clusters/np/
 │  ├─ flux-system/                 (generated)
@@ -650,10 +677,11 @@ flux-releases/
 │  └─ configs/      namespaces.yaml  mesh-policy.yaml  netpol-*.yaml  quotas.yaml
 └─ apps/np/{orders,payments,inventory}/helmrelease.yaml
 ```
+
 Implementation order and **why**:
 
 | Order | Object | Why before the next |
-|---|---|---|
+| --- | --- | --- |
 | 1 | HelmRepository `istio`, OCI HelmRepository `acme-charts` | Sources must exist before releases |
 | 2 | `istio-base` (CRDs) | CRDs before anything that uses them |
 | 3 | `istiod` (`dependsOn: istio-base`) | Webhook must be healthy **before** pods are created or sidecars silently don't inject |
@@ -677,6 +705,7 @@ spec:
 # 20-infra-configs.yaml: same shape, name infra-configs, path ./infrastructure/configs, + spec.dependsOn: [{name: infra-controllers}]
 # 30-apps.yaml:        name apps, path ./apps/np, + dependsOn: [{name: infra-configs}]
 ```
+
 ```yaml
 # infrastructure/controllers/istiod.yaml  (lean for e2-standard-2 nodes)
 apiVersion: helm.toolkit.fluxcd.io/v2
@@ -696,6 +725,7 @@ spec:
       accessLogEncoding: JSON                        # Envoy access logs → stdout → Cloud Logging
       outboundTrafficPolicy: { mode: ALLOW_ANY }     # → REGISTRY_ONLY in S5
 ```
+
 Hints: HelmRepository `url: https://istio-release.storage.googleapis.com/charts`. If `istiod` fails to create pods, check the webhook firewall rule from P3 (`15017` from the master CIDR). Resource budget: istiod ≈ 200m/512Mi, each pod ≈ app 100m + proxy 50m + otel 50m + fluent-bit 25m — start with **1 replica per service**.
 **Verify:** `flux get all -A`, `kubectl -n istio-system get pods`, `istioctl analyze -A`.
 **Gate G5:** delete `istiod`'s HelmRelease, create a test pod in a labelled namespace → no sidecar. Re-apply → still no sidecar until pod restarts. Explain why.
@@ -735,9 +765,11 @@ resource "google_logging_metric" "errors" {
   label_extractors = { "domain" = "EXTRACT(resource.labels.namespace_name)" }
 }
 ```
+
 > The exclusion block above is simplified: in a real setup you modify the built-in `_Default` sink's exclusions. Check the provider docs for `google_logging_project_sink` with name `_Default`. Treat this as a documented TODO to fix yourself.
 
 **OTel Collector sidecar config** (ConfigMap in the chart; verify exporter option names against current `googlecloud` exporter docs):
+
 ```yaml
 receivers:
   otlp: { protocols: { grpc: { endpoint: 127.0.0.1:4317 }, http: { endpoint: 127.0.0.1:4318 } } }
@@ -752,7 +784,9 @@ service:
     logs:    { receivers: [otlp], processors: [resourcedetection, batch], exporters: [googlecloud] }
     traces:  { receivers: [otlp], processors: [resourcedetection, batch], exporters: [googlecloud] }
 ```
+
 **Fluent Bit sidecar (file-tail pattern)** — option names depend on version, confirm in the Fluent Bit docs:
+
 ```ini
 [SERVICE]
     Flush 5
@@ -777,12 +811,15 @@ service:
     container_name app
     export_to_project_id ${PROJECT_ID}
 ```
+
 **Verify (after P7 has pods):**
+
 ```bash
 gcloud logging read 'resource.type="k8s_container" resource.labels.namespace_name="dom-orders"' --limit 5 --format json
 gcloud logging read 'logName:"app-otel"' --limit 3
 gcloud logging buckets describe central-app-logs --location us-central1
 ```
+
 **Gate G6:** show one request's trail in Logs Explorer: app JSON log + Envoy access log + OTel/Fluent Bit record, correlated by trace/request id.
 
 ---
@@ -790,6 +827,7 @@ gcloud logging buckets describe central-app-logs --location us-central1
 ## P7 — Tier-3 three domains (infra + app + chart)
 
 ### 7a. Shared Helm chart (Tier 2 `helm-charts/acme-microservice`)
+
 Values you want the chart to expose: `image.repository/tag`, `port`, `env`, `domain`, `serviceAccount.gsaEmail`, `sidecars.otel.enabled`, `sidecars.fluentbit.enabled`, `resources`. Key template fragment:
 
 ```yaml
@@ -823,10 +861,12 @@ spec:
           resources: { requests: { cpu: 25m, memory: 32Mi }, limits: { memory: 64Mi } }
         {{- end }}
 ```
+
 ServiceAccount template annotation: `iam.gke.io/gcp-service-account: {{ .Values.serviceAccount.gsaEmail }}`.
 Publish: `helm package . && helm push acme-microservice-0.1.0.tgz oci://us-central1-docker.pkg.dev/<proj>/apps` (or the GitLab OCI registry) — Flux uses an `OCI` `HelmRepository`.
 
 ### 7b. Tier-3 `<domain>-infra` (Terraform), using the Tier-1 module
+
 ```hcl
 # platform/terraform-modules/modules/app-identity/main.tf
 variable "project_id" {}
@@ -847,6 +887,7 @@ resource "google_project_iam_member" "roles" {
 }
 output "email" { value = google_service_account.app.email }
 ```
+
 ```hcl
 # applications/orders/orders-infra/main.tf
 module "identity" {
@@ -858,9 +899,11 @@ module "identity" {
   project_roles = ["roles/logging.logWriter", "roles/cloudtrace.agent", "roles/monitoring.metricWriter"]
 }
 ```
+
 Repeat for payments/inventory (copy = **three lines of difference**, which is the whole point of Tier 1 modules).
 
 ### 7c. Minimal services (different languages, same contract: `/healthz`, `/work`; JSON logs with `severity`)
+
 ```go
 // orders (Go)
 package main
@@ -877,6 +920,7 @@ func main() {
   http.ListenAndServe(":8080", nil)
 }
 ```
+
 ```python
 # payments (Python / FastAPI)   pip: fastapi uvicorn
 import json, logging, sys
@@ -891,6 +935,7 @@ def hz(): return "ok"
 def work(): log.info("payment authorised"); return {"ok": True}
 # run: uvicorn main:app --host 0.0.0.0 --port 8080
 ```
+
 ```js
 // inventory (Node / Express)   npm i express
 const app = require('express')();
@@ -899,14 +944,19 @@ app.get('/healthz', (_, r) => r.send('ok'));
 app.get('/work', (_, r) => { log('INFO', 'stock reserved'); r.json({ ok: true }); });
 app.listen(8080);
 ```
+
 Call graph: **orders → payments, orders → inventory**; payments ↔ inventory **denied**. Env: `PAYMENTS_URL=http://payments.dom-payments.svc.cluster.local`, `INVENTORY_URL=http://inventory.dom-inventory.svc.cluster.local`.
 
+> **These sketches are now real code:** the full services live in this repo under `apps/{orders,payments,inventory}` and add the Acme Store saga — `POST /orders` checks stock via `inventory /items/:id`, decrements + writes the order row in shared **`commerce-db`** (one tx), calls `payments /charge` (own **`payments-db`**), and compensates on decline (`simulate=fail` or `.99` amounts). Locally the DBs are Postgres StatefulSets in `dom-data`; on GCP they're `commerce-sql` + `payments-sql` (P7f). Keep `/healthz` + `/work` — the verify matrix above still uses them.
+
 ### 7d. App CI (Tier 3): build → push to Artifact Registry → bump tag in `flux-releases`
+
 - Image build on GitLab shared runners with Docker-in-Docker; authenticate to AR using WIF (same `id_tokens` pattern as P2, SA = a push-only GSA created in `bootstrap`/`gke-platform` with `roles/artifactregistry.writer`; get a token with `gcloud auth print-access-token` and `docker login -u oauth2accesstoken`).
 - Tag bump: a job commits `image.tag: $CI_COMMIT_SHORT_SHA` into `apps/np/<domain>/helmrelease.yaml` in `flux-releases`. (Stretch: replace with Flux Image Automation.)
 - Remember the rule from §3: `AR_REPO` is defined only at `applications/`.
 
 ### 7e. Default-deny + explicit allows (Flux, `infrastructure/configs`)
+
 ```yaml
 # per namespace, e.g. dom-payments
 apiVersion: networking.k8s.io/v1
@@ -940,6 +990,7 @@ spec:
     - from: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: dom-orders } } }]
       ports: [{ port: 8080 }]
 ```
+
 ```yaml
 # L7 identity rule (payments only accepts the orders ServiceAccount)
 apiVersion: security.istio.io/v1
@@ -955,7 +1006,9 @@ kind: PeerAuthentication
 metadata: { name: default, namespace: dom-payments }
 spec: { mtls: { mode: STRICT } }
 ```
+
 **Verify matrix** (run all, compare with prediction):
+
 ```bash
 kubectl -n dom-orders exec deploy/orders -c app -- wget -qO- payments.dom-payments/work     # allowed
 kubectl -n dom-payments exec deploy/payments -c app -- wget -qO- -T3 inventory.dom-inventory/work   # blocked (timeout = netpol)
@@ -964,8 +1017,24 @@ kubectl -n dom-orders exec deploy/orders -c app -- wget -qO- --header 'Host: x' 
 istioctl proxy-status; istioctl x describe pod <orders-pod> -n dom-orders
 kubectl -n dom-orders get pod -l app=orders -o jsonpath='{.items[0].spec.containers[*].name}'   # app istio-proxy otel-collector fluent-bit
 ```
+
 **Nuances revealed:** default-deny **egress** breaks Workload Identity (metadata server `169.254.169.252:988`) and DNS and xDS — you must allow them; NetworkPolicy matches the *original* destination port (sidecar redirect happens after); STRICT mTLS rejects plaintext from non-mesh callers (relevant to P9).
 **Gate G7:** the call-graph holds, and you can state which layer produced each rejection from its error signature alone.
+
+### 7f. Data tier — Cloud SQL Postgres (promoted from the stretch menu)
+
+The local `dom-data` StatefulSets map to **two Cloud SQL Postgres instances** on GCP:
+
+| Local (Minikube labs) | GCP twin | Why two instances |
+| --- | --- | --- |
+| `commerce-db` (dom-data) | `commerce-sql` — db `commerce`, schemas `inventory` + `sales` | Shared DB is the *lesson*: one failure domain, one tx for decrement+order |
+| `payments-db` (dom-data) | `payments-sql` — db `payments` | Private instance = data isolation you can't get from a shared schema |
+| `db-seed` Job | SQL migrations run in app CI (or `google_sql_user`/init scripts) | Same idempotent roles/grants/items |
+
+- **Connectivity:** PSA `google_compute_global_address` `100.64.0.0/20` (purpose `VPC_PEERING`) + `google_service_networking_connection` on `acme-main`; private-IP instances only. PSA is a *peering* — non-transitive; needs custom-route export for hybrid.
+- **In-pod access:** Cloud SQL Auth Proxy as the 5th container (`127.0.0.1:5432` → instance). The app `DATABASE_URL` flips from `commerce-db.dom-data:5432` to `127.0.0.1:5432` — code unchanged, identity supplied by the pod's Workload Identity GSA via IAM DB auth. This is the L7-identity gap from Lab 06 Step 5, closed the GCP way.
+- **Policy twin:** `orders`/`inventory` proxy → `commerce-sql`; `payments` proxy → `payments-sql`. The `payments_db` instance-level IAM/DB-user grants replace the in-cluster `payments-db-ingress` NetworkPolicy.
+- **Seed/roles twin:** `orders_rw` keeps `UPDATE` on `inventory.items` (the shared-schema tension is preserved as an ADR talking point); `payments_rw` exists only on `payments-sql`.
 
 ---
 
@@ -974,7 +1043,7 @@ kubectl -n dom-orders get pod -l app=orders -o jsonpath='{.items[0].spec.contain
 **Goal:** flip `training_wheels=false`, then repair each break. Keep a table; fill the "Door used" column from evidence (flow logs / connectivity tests), not memory.
 
 | Flow | Expected door after P8 | Fix if broken |
-|---|---|---|
+| --- | --- | --- |
 | Node → `*.googleapis.com` (logging, AR, GCS) | 1: PGA + private VIP | `private-googleapis-vip` route + DNS zones (P3) |
 | Node → `*.pkg.dev` image pulls | 1 | `pkgdev-private` zone |
 | Flux source-controller → `gitlab.com` | 3: tagged nodes + NAT | node tag `allowed-open-nat` |
@@ -989,6 +1058,7 @@ kubectl get nodes; kubectl -n flux-system get gitrepositories     # which break 
 gcloud compute routes list --filter="network:acme-main"
 gcloud logging read 'resource.type="gce_subnetwork" jsonPayload.connection.dest_ip:"140."' --limit 5   # VPC flow logs
 ```
+
 Extra exercises: (1) remove `allowed-open-nat` from the node pool tags → watch Flux go red; (2) block Door 3 but keep PGA → what still works? (3) set mesh `outboundTrafficPolicy: REGISTRY_ONLY` (S5) and add a `ServiceEntry` for the one external host you need.
 **Gate G8:** you can draw the packet path for each row without looking, including where SNAT happens.
 
@@ -1011,6 +1081,7 @@ spec:
   parentRefs: [{ name: internal-gw }]
   rules: [{ backendRefs: [{ name: orders, port: 8080 }] }]
 ```
+
 Test from the `probe` VM: `curl http://<gateway-ip>/work`.
 **Expected breaks (diagnose each):** (1) no proxy-only subnet or firewall `allow-proxy-only-to-nodes` → 502/timeouts; (2) STRICT mTLS rejects the LB's plaintext → use a `portLevelMtls: { 8080: { mode: PERMISSIVE } }` exception or route via an Istio ingress gateway instead; (3) health-check source ranges (130.211.0.0/22, 35.191.0.0/16) blocked by default-deny NetworkPolicy.
 **Gate G9:** you can explain what the proxy-only subnet IPs are *used for* and why your own VMs never get one.
@@ -1020,8 +1091,8 @@ Test from the `probe` VM: `curl http://<gateway-ip>/work`.
 ## P10 — Stretch menu (pick by interest; each is self-contained)
 
 | ID | Lab | Nuance it reveals |
-|---|---|---|
-| S1 | **Private Services Access + Cloud SQL** in `shared-services`: `google_compute_global_address` (purpose `VPC_PEERING`, `100.64.0.0/20`) + `google_service_networking_connection`; add Cloud SQL Auth Proxy as a 5th sidecar | PSA is a *peering*: non-transitive; custom-route export needed for hybrid |
+| --- | --- | --- |
+| ~~S1~~ | **Promoted to main path (P7f)** — Cloud SQL `commerce-sql` + `payments-sql` via PSA + Auth Proxy sidecar | — |
 | S2 | **Hybrid Door 4**: second VPC `onprem-sim` (`192.168.100.0/24`), HA VPN + Cloud Router BGP both ways (hourly cost — tear down same day); DNS peering/forwarding; `ip-masq-agent` non-masquerade CIDRs | Why pod IPs are unknown to "on-prem"; overlapping CIDR pain |
 | S3 | **Per-domain node pools** each with its own pod secondary range, node SA and taint; VPC firewall rules by source range/SA | Real VPC-level per-domain policy inside one cluster |
 | S4 | **Consul contract bus** on free-tier e2-micro + GitLab runner on the same VM; swap `terraform_remote_state` for the Consul provider | Private services vs SaaS runners; Door 3 for the runner |
@@ -1030,6 +1101,7 @@ Test from the `probe` VM: `curl http://<gateway-ip>/work`.
 | S7 | Add **Cloud Storage / Firebase / Pub-Sub** the Tier-1-module way (below) | How the platform grows without copy-paste |
 
 **S7 pattern — extending infra later** (this is why modules live in Tier 1):
+
 ```hcl
 # Tier 1: platform/terraform-modules/modules/gcs-bucket  (uniform access, PAP enforced, labels, optional IAM members)
 # Tier 3: applications/orders/orders-infra
@@ -1039,6 +1111,7 @@ module "uploads" {
   writers = ["serviceAccount:${module.identity.email}"]
 }
 ```
+
 Then expose the bucket name to the chart via Flux `postBuild.substitute` / HelmRelease `values` — **by deterministic naming**, no lookup service needed.
 
 ---
@@ -1048,7 +1121,8 @@ Then expose the bucket name to the chart via Flux `postBuild.substitute` / HelmR
 Rough order of magnitude while up (verify current pricing; use the budget alarm): 2–3 spot `e2-standard-2`, one Cloud NAT gateway, 2 in-use static IPs, one internal LB, small PDs → **a few dollars per day**; near-zero when destroyed (keep state buckets). Cloud SQL, HA VPN tunnels and external LBs are the expensive stretch items — run them for hours, not days.
 
 Teardown order (reverse of build) — script it as `destroy-all.sh` like your earlier ones:
-1. `flux suspend` apps → delete `Gateway` objects (so LB resources are removed before the VPC) 
+
+1. `flux suspend` apps → delete `Gateway` objects (so LB resources are removed before the VPC)
 2. `gke-platform` → `network` (NAT/router/addresses) → keep `bootstrap`
 3. Orphans to check: `gcloud compute forwarding-rules list`, `addresses list`, `disks list`, `routers list`.
 

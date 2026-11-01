@@ -11,9 +11,7 @@ When an external client (or Google's Regional Internal L7 Load Balancer in `prox
 
 ![North-South ingress gauntlet — four guards](../diagrams/lab08-ingress-gauntlet.drawio.svg)
 
-| Why `externalTrafficPolicy: Local` Is Mandatory Here |
-|---|
-| With the default `externalTrafficPolicy: Cluster`, a node receiving traffic for `10.10.0.240` **SNATs the packet to its own Node IP (`10.10.0.10`)** before forwarding to the `payments` pod. That destroys the client's true source IP (`10.10.1.3`), breaking both audit logging and IP-based `NetworkPolicy` / `AuthorizationPolicy`! Setting `externalTrafficPolicy: Local` preserves `10.10.1.3` all the way to the pod. |
+> **Why `externalTrafficPolicy: Local` is mandatory here:** with the default `externalTrafficPolicy: Cluster`, a node receiving traffic for `10.10.0.240` **SNATs the packet to its own Node IP (`10.10.0.10`)** before forwarding to the `orders` pod. That destroys the client's true source IP (`10.10.1.3`), breaking both audit logging and IP-based `NetworkPolicy` / `AuthorizationPolicy`! Setting `externalTrafficPolicy: Local` preserves `10.10.1.3` all the way to the pod.
 
 ---
 
@@ -51,27 +49,27 @@ EOF
 
 ---
 
-### Step 2: Create the `payments-lb` LoadBalancer Service
+### Step 2: Create the `orders-lb` LoadBalancer Service
 
 ```bash
 kubectl apply -f - <<'EOF'
 apiVersion: v1
 kind: Service
 metadata:
-  name: payments-lb
-  namespace: dom-payments
+  name: orders-lb
+  namespace: dom-orders
 spec:
   type: LoadBalancer
   externalTrafficPolicy: Local
   selector:
-    app: payments
+    app: orders
   ports:
     - name: http
       port: 80
       targetPort: 8080
 EOF
 
-LB_IP=$(kubectl -n dom-payments get svc payments-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+LB_IP=$(kubectl -n dom-orders get svc orders-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
 echo "Assigned Internal LoadBalancer IP: $LB_IP"
 ```
 
@@ -80,14 +78,17 @@ echo "Assigned Internal LoadBalancer IP: $LB_IP"
 ### Step 3: Walk Through the 4-Layer Ingress Gauntlet (Break → Diagnose → Fix)
 
 #### Break #1: Underlay Router Firewall Drop (`000` Timeout)
-Try calling `http://$LB_IP/` from `probe` (`10.10.1.3`):
+
+Try calling `http://$LB_IP/healthz` from `probe` (`10.10.1.3`):
 
 ```bash
-docker exec probe curl -sS -m 3 -o /dev/null -w 'HTTP Code: %{http_code}\n' "http://$LB_IP/" || true
+docker exec probe curl -sS -m 3 -o /dev/null -w 'HTTP Code: %{http_code}\n' "http://$LB_IP/healthz" || true
 # Symptom: HTTP Code: 000 (Connection timed out)
 ```
+
 * **Why?** `vpc-router` (`FORWARD DROP` from Lab 01) only allows TCP `8443` to the control plane; it drops TCP `80` to `$LB_IP`.
 * **Fix Break #1:** Open TCP `80` from `10.10.1.3` to `$LB_IP` on `vpc-router`:
+
 ```bash
 docker exec vpc-router iptables -A FORWARD -s 10.10.1.3 -d "$LB_IP" -p tcp --dport 80 -j ACCEPT
 ```
@@ -95,26 +96,29 @@ docker exec vpc-router iptables -A FORWARD -s 10.10.1.3 -d "$LB_IP" -p tcp --dpo
 ---
 
 #### Break #2: Cilium Ingress `NetworkPolicy` Drop (`000` Timeout + Hubble `DROPPED`)
+
 Test again from `probe`:
 
 ```bash
-docker exec probe curl -sS -m 3 -o /dev/null -w 'HTTP Code: %{http_code}\n' "http://$LB_IP/" || true
+docker exec probe curl -sS -m 3 -o /dev/null -w 'HTTP Code: %{http_code}\n' "http://$LB_IP/healthz" || true
 # Symptom: Still HTTP Code: 000! Let's check Hubble:
-kubectl -n kube-system exec ds/cilium -- hubble observe --to-namespace dom-payments --verdict DROPPED --last 5
+kubectl -n kube-system exec ds/cilium -- hubble observe --to-namespace dom-orders --verdict DROPPED --last 5
 ```
-* **Why?** The packet passed `vpc-router`, hit the worker node, was DNAT'd from `$LB_IP:80` → `payments:8080`, and was **dropped by `dom-payments` Ingress `NetworkPolicy`** (which only allowed `namespaceSelector: dom-orders`).
+
+* **Why?** The packet passed `vpc-router`, hit the worker node, was DNAT'd from `$LB_IP:80` → `orders:8080`, and was **dropped by `dom-orders` Ingress `NetworkPolicy`** — `dom-orders` has `default-deny` but *no ingress allow yet* (Lab 05 only opened ingress on `payments`/`inventory`).
 * **Fix Break #2:** Allow ingress from `ipBlock: 10.10.1.0/28` on Pod port `8080` *(On GCP P9, this is `proxy-only-subnet` `10.10.254.0/23` + health-check ranges)*:
+
 ```bash
 kubectl apply -f - <<'EOF'
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-ops-lb-ingress
-  namespace: dom-payments
+  namespace: dom-orders
 spec:
   podSelector:
     matchLabels:
-      app: payments
+      app: orders
   policyTypes:
     - Ingress
   ingress:
@@ -130,25 +134,28 @@ EOF
 ---
 
 #### Break #3: Istio `STRICT` mTLS Rejects Plaintext LB (`Connection reset by peer`)
+
 Test again from `probe`:
 
 ```bash
-docker exec probe curl -sS -m 3 -o /dev/null -w 'HTTP Code: %{http_code}\n' "http://$LB_IP/" || true
+docker exec probe curl -sS -m 3 -o /dev/null -w 'HTTP Code: %{http_code}\n' "http://$LB_IP/healthz" || true
 # Symptom CHANGED! "curl: (56) Recv failure: Connection reset by peer"
 ```
-* **Why?** `probe` (and any external L4/L7 LoadBalancer that isn't an Istio Ingress Gateway) speaks **plaintext HTTP**, whereas `dom-payments` has namespace-wide `PeerAuthentication: STRICT`.
-* **Fix Break #3:** Apply a workload-specific `PeerAuthentication` on `payments` allowing `PERMISSIVE` on port `8080` (so East-West calls from `orders` still use mTLS, while North-South LB traffic is accepted):
+
+* **Why?** `probe` (and any external L4/L7 LoadBalancer that isn't an Istio Ingress Gateway) speaks **plaintext HTTP**, whereas `dom-orders` has namespace-wide `PeerAuthentication: STRICT`.
+* **Fix Break #3:** Apply a workload-specific `PeerAuthentication` on `orders` allowing `PERMISSIVE` on port `8080` (outbound calls from `orders` to `payments`/`inventory` still use mTLS — PERMISSIVE only relaxes *inbound*):
+
 ```bash
 kubectl apply -f - <<'EOF'
 apiVersion: security.istio.io/v1
 kind: PeerAuthentication
 metadata:
-  name: payments-lb-permissive
-  namespace: dom-payments
+  name: orders-lb-permissive
+  namespace: dom-orders
 spec:
   selector:
     matchLabels:
-      app: payments
+      app: orders
   mtls:
     mode: STRICT
   portLevelMtls:
@@ -160,28 +167,46 @@ EOF
 ---
 
 #### Break #4: Istio `AuthorizationPolicy` Rejects Unauthenticated Caller (`HTTP 403`)
-Test again from `probe`:
 
-```bash
-docker exec probe curl -i -sS -m 3 "http://$LB_IP/" | head -n 10
-# Symptom CHANGED AGAIN! "HTTP/1.1 403 Forbidden" -> "RBAC: access denied"
-```
-* **Why?** In Lab 06, we created `AuthorizationPolicy: only-orders-sa` which **only** allows SPIFFE principal `cluster.local/ns/dom-orders/sa/orders`. Plaintext LB requests have no SPIFFE principal!
-* **Fix Break #4:** Add `ipBlocks: ["10.10.1.0/28"]` as a second rule in `only-orders-sa` (which works because `externalTrafficPolicy: Local` preserved `10.10.1.3`!):
+`orders` is the *public* API — but let's lock it the way we locked `payments` in Lab 06 (SPIFFE-principals-only), which is **wrong for a north-south entrypoint**:
+
 ```bash
 kubectl apply -f - <<'EOF'
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
-  name: only-orders-sa
-  namespace: dom-payments
+  name: orders-entry
+  namespace: dom-orders
 spec:
   action: ALLOW
   rules:
     - from:
         - source:
             principals:
-              - "cluster.local/ns/dom-orders/sa/orders"
+              - "cluster.local/ns/dom-orders/sa/orders"   # copied the east-west pattern — WRONG here
+EOF
+```
+
+Test again from `probe`:
+
+```bash
+docker exec probe curl -i -sS -m 3 "http://$LB_IP/healthz" | head -n 10
+# Symptom CHANGED AGAIN! "HTTP/1.1 403 Forbidden" -> "RBAC: access denied"
+```
+
+* **Why?** `orders`' clients are **north-south IPs**, not mesh workloads — plaintext LB requests carry no SPIFFE principal, so a principals-only allow-list rejects 100% of legitimate traffic. The allow-list for a public entrypoint must be `ipBlocks`, not `principals`.
+* **Fix Break #4:** Replace `orders-entry` with an `ipBlocks` rule covering `acme-ops` (which works because `externalTrafficPolicy: Local` preserved `10.10.1.3`!). On GCP this range is `proxy-only-subnet` `10.10.254.0/23`:
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: orders-entry
+  namespace: dom-orders
+spec:
+  action: ALLOW
+  rules:
     - from:
         - source:
             ipBlocks:
@@ -189,11 +214,17 @@ spec:
 EOF
 ```
 
-Now run the final test from `probe`:
+Now run the final test from `probe` — not just `200`, but the **full order saga through the public door**:
 
 ```bash
-docker exec probe curl -i -sS -m 3 "http://$LB_IP/" | head -n 5
+docker exec probe curl -i -sS -m 3 "http://$LB_IP/healthz" | head -n 5
 # Expected: HTTP/1.1 200 OK!
+
+docker exec probe curl -sS -m 5 -X POST -H 'Content-Type: application/json' \
+  -d '{"item_id":1,"qty":1}' "http://$LB_IP/orders"
+# Expected: {"order_id":N,"status":"confirmed","amount":19.99}
+#   -> orders called inventory (mTLS), wrote commerce-db, charged payments (mTLS):
+#      every layer you built in Labs 03–07 just carried one real transaction.
 ```
 
 ---
@@ -201,7 +232,7 @@ docker exec probe curl -i -sS -m 3 "http://$LB_IP/" | head -n 5
 ## 3. Master Ingress Gauntlet Summary Table
 
 | Step | What Was Broken | Exact Symptom from `probe` | Proof Command | Fix Applied |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | **1** | Underlay Firewall (`vpc-router`) | `000` (`Connection timed out`) | `iptables -L FORWARD -n -v` | Allow `10.10.1.3 -> $LB_IP:80` |
 | **2** | Cilium Ingress `NetworkPolicy` | `000` (`Connection timed out`) | `hubble observe --verdict DROPPED` | Allow `ipBlock: 10.10.1.0/28` on `:8080` |
 | **3** | Istio `PeerAuthentication: STRICT` | `curl: (56) Connection reset by peer` | `istioctl x describe pod` | `portLevelMtls: {8080: {mode: PERMISSIVE}}` |

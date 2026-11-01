@@ -11,7 +11,7 @@ Practise the **Kubernetes layer** of the GCP plan on your laptop first: cluster 
 **Short answer: no — Kubernetes sits *on top of* the network; it does not create it.**
 
 | Question | Answer |
-|---|---|
+| --- | --- |
 | Can Kubernetes create a VPC / subnet / route / NAT? | **No, not natively.** Those are cloud (or Docker) objects. Terraform does it on GCP. |
 | Can anything *inside* Kubernetes create them? | Only by calling the cloud API: **Config Connector** (GCP), **Crossplane**, or the **Terraform/OpenTofu controller (Flux tf-controller)** turn VPCs into Kubernetes CRDs — but GCP still creates the VPC. Not the learning path you want; you want hand-written Terraform. |
 | Does Kubernetes know about VPC subnets? | **No.** It only knows nodes, a **pod CIDR**, and a **service CIDR**. Which subnet a node sits in is invisible to it. |
@@ -22,7 +22,7 @@ Practise the **Kubernetes layer** of the GCP plan on your laptop first: cluster 
 **So on Docker we simulate the layer *below* Kubernetes ourselves** — and that is the point of this lab:
 
 | GCP concept | Local stand-in in this lab |
-|---|---|
+| --- | --- |
 | VPC `acme-main` | Docker network `acme-main` (`10.10.0.0/24`) |
 | Second subnet `ops` | Docker network `acme-ops` (`10.10.1.0/28`) |
 | Routes / Door 4 (hybrid) | A **router container** with `ip_forward` + `ip route add` on the nodes |
@@ -38,6 +38,7 @@ Practise the **Kubernetes layer** of the GCP plan on your laptop first: cluster 
 | Terraform → Flux handshake | Flux on kind (GitLab repo) |
 
 ### What you will *not* be able to practise locally (do it on GCP)
+
 Workload Identity / WIF, Private Google Access + private DNS VIP, real Cloud NAT with static IPs, Cloud Logging API, GKE private control plane + authorized networks, Artifact Registry. Everything else in the Kubernetes layer transfers 1:1.
 
 ---
@@ -46,12 +47,14 @@ Workload Identity / WIF, Private Google Access + private DNS VIP, real Cloud NAT
 
 - Docker (Desktop or Engine), **8 GB RAM free** for Docker (cluster + Istio + Cilium). 1 control-plane + 2 workers.
 - Tools: `kind`, `kubectl`, `helm`, `istioctl`, `flux`, `jq`, `dig`.
+
   ```bash
   # macOS
   brew install kind kubectl helm istioctl fluxcd/tap/flux jq
   # Linux: use each project's release binary; verify with the --version commands below
   kind --version; kubectl version --client; helm version; istioctl version --remote=false; flux --version
   ```
+
 - **Docker Desktop (macOS/Windows) caveat:** your host cannot reach container IPs (`10.10.x.x`). Run **every network test from a container** (the `probe` container in K3) or via `kubectl exec`. On Linux the host can reach them directly.
 - **Linux caveat:** if kind nodes crash with "too many open files": `sudo sysctl fs.inotify.max_user_watches=524288 fs.inotify.max_user_instances=512`.
 - Work in a folder, e.g. `mkdir -p ~/acme-k8s-lab && cd ~/acme-k8s-lab`.
@@ -70,7 +73,9 @@ Order: **K1 → K2 → K3 → K4 → K5 → K6 → K7 → K8 → K9 → K10 → 
 docker network create --driver bridge --subnet 10.10.0.0/24 --gateway 10.10.0.1 acme-main
 docker network create --driver bridge --subnet 10.10.1.0/28 --gateway 10.10.1.1 acme-ops
 ```
+
 `kind-acme.yaml`
+
 ```yaml
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
@@ -84,6 +89,7 @@ nodes:
   - role: worker
   - role: worker
 ```
+
 ```bash
 # attach the cluster to OUR docker network (experimental env var, supported by kind)
 KIND_EXPERIMENTAL_DOCKER_NETWORK=acme-main kind create cluster --config kind-acme.yaml
@@ -101,6 +107,7 @@ kubectl get nodes            # Ready now
 kubectl label node acme-worker  pool=main
 kubectl label node acme-worker2 pool=main
 ```
+
 Hints: if Cilium pods crash-loop, your Docker kernel may be too old for eBPF — fall back to Calico (`disableDefaultCNI` stays, install the Calico manifest with the same pod CIDR) and note what you lose (Hubble, identity-based policy).
 **Verify:** `docker network inspect acme-main --format '{{range .Containers}}{{.Name}} {{.IPv4Address}}{{"\n"}}{{end}}'` shows the 3 kind nodes in `10.10.0.0/24`.
 **Gate G-K1:** explain why a second cluster on the same Docker network with pod CIDR `10.20.0.0/20` would be a problem (overlap) — and which GCP object enforces the same rule.
@@ -120,7 +127,9 @@ docker exec acme-worker ip -br addr                           # eth0 = node IP o
 docker exec acme-worker ip route                              # default via 10.10.0.1  <- the "internet gateway"
 docker exec acme-worker ip route | grep 10.20                 # routes/devices Cilium added for pod CIDRs
 ```
+
 Questions to answer in your own words:
+
 1. Which pods have a node IP, and why? (hint: `hostNetwork: true`)
 2. What is `/24` per node of the `/20` pod range? How many nodes max? (compare plan: `max_pods_per_node=64` → /25 on GKE)
 3. Which of the three ranges is routable by anything outside the cluster? (none of pods/services — this is why masquerade exists, K4.)
@@ -133,11 +142,12 @@ Questions to answer in your own words:
 
 **Goal:** reproduce "subnet ↔ subnet", "route next hop" and "firewall rules" which Kubernetes itself knows nothing about. (GCP: P3 routes/firewall, Door 4.)
 
-```
+```text
  acme-ops 10.10.1.0/28                         acme-main 10.10.0.0/24
  [probe 10.10.1.3] ── 10.10.1.2 [vpc-router] 10.10.0.250 ── [acme-control-plane][acme-worker][acme-worker2]
                                   ip_forward + iptables  (route next hop + firewall)
 ```
+
 ```bash
 # router: dual-homed container with IP forwarding
 docker run -d --name vpc-router --cap-add NET_ADMIN --sysctl net.ipv4.ip_forward=1 \
@@ -155,7 +165,9 @@ CP_IP=$(docker inspect -f '{{(index .NetworkSettings.Networks "acme-main").IPAdd
 docker exec probe ping -c2 $CP_IP
 docker exec probe curl -sk -m5 -o /dev/null -w '%{http_code}\n' https://$CP_IP:6443/version   # any HTTP code = reachable; 000 = blocked
 ```
+
 **Firewall exercise (iptables on the router = VPC firewall):**
+
 ```bash
 docker exec vpc-router iptables -P FORWARD DROP                                  # "deny all" between subnets
 docker exec vpc-router iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
@@ -166,7 +178,9 @@ docker exec vpc-router iptables -A FORWARD -s 10.10.1.3 -d $CP_IP -p tcp --dport
 docker exec probe curl -sk -m5 -o /dev/null -w '%{http_code}\n' https://$CP_IP:6443/version   # reachable again
 docker exec vpc-router iptables -L FORWARD -n -v --line-numbers
 ```
+
 Hints:
+
 - If `iptables` errors, try `iptables-legacy` (nft/legacy mismatch on some hosts).
 - Routes live in the container's network namespace: **they are lost when a node container restarts.** Keep the `docker exec … ip route …` lines in `routes.sh` and re-run.
 - Break it: remove the `ESTABLISHED,RELATED` rule → replies are dropped → "ping works one way" confusion = the exact symptom of an asymmetric firewall.
@@ -180,20 +194,24 @@ Hints:
 **Goal:** the plan's P8 in miniature. Cloud NAT ⇒ Docker's MASQUERADE; "tags" ⇒ node labels; "default route deleted" ⇒ `ip route del default`.
 
 Preload everything the nodes will need **before** cutting egress (nodes can't pull images afterwards — a real lesson):
+
 ```bash
 docker pull curlimages/curl && kind load docker-image curlimages/curl --name acme
 docker pull nginxinc/nginx-unprivileged:alpine && kind load docker-image nginxinc/nginx-unprivileged:alpine --name acme
 docker run -d --name echo --network acme-main --ip 10.10.0.201 nginx:alpine     # an "internal service" that logs client IPs
 ```
+
 Helper (run a curl pod pinned to a given node):
+
 ```bash
 probe() { n=$1; shift
   kubectl run p-$RANDOM --rm -i --restart=Never -q --image=curlimages/curl --image-pull-policy=Never \
     --overrides="{\"spec\":{\"nodeSelector\":{\"kubernetes.io/hostname\":\"$n\"}}}" -- -sS -m 5 -o /dev/null -w '%{http_code}\n' "$@" 2>&1 | tail -1; }
 EX=$(dig +short example.com | head -1); echo $EX
 ```
+
 | Step | Command | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 0 baseline (training wheels) | `probe acme-worker https://example.com` | `200` (default route → Docker gateway → host NAT) |
 | 1 who do I look like? | `probe acme-worker http://10.10.0.201` then `docker logs echo --tail 2` | client IP = **node IP**, not pod IP (SNAT). If you see a pod IP → `kubectl -n kube-system exec ds/cilium -- cilium config view \| grep -i masq` |
 | 2 close the doors | `for n in acme-worker acme-worker2; do docker exec $n ip route del default; done` | |
@@ -259,6 +277,7 @@ call dom-orders   orders   http://payments.dom-payments/
 call dom-orders   orders   http://inventory.dom-inventory/
 call dom-payments payments http://inventory.dom-inventory/        # works too — flat network!
 ```
+
 **Nuance revealed:** Service `port 80` → pod `8080`. Remember this for K6: **NetworkPolicy ports are *pod* ports (8080), not Service ports.**
 **Gate G-K5:** list three reasons "it works" here is a *problem* for a three-domain platform.
 
@@ -318,7 +337,9 @@ spec:
 EOF
 done
 ```
+
 **Verify matrix** (predict first):
+
 ```bash
 call dom-orders   orders   http://payments.dom-payments/       # OK
 call dom-orders   orders   http://inventory.dom-inventory/     # OK
@@ -327,7 +348,9 @@ call dom-inventory inventory http://payments.dom-payments/     # timeout
 # see the drops (agent has the hubble CLI; or install hubble and port-forward)
 kubectl -n kube-system exec ds/cilium -- hubble observe --verdict DROPPED --last 10
 ```
+
 Break-it exercises:
+
 1. Delete `allow-dns` in `dom-orders` → calls fail with "bad address" (DNS), not a timeout. Different symptom, same root cause class.
 2. Change the policy port to `80` → blocked. (Service port vs pod port.)
 **Gate G-K6:** you can tell, from the error text alone, DNS-denied vs connection-denied vs not-allowed-by-server.
@@ -345,7 +368,9 @@ kubectl label ns dom-orders dom-payments dom-inventory istio-injection=enabled
 for ns in dom-orders dom-payments dom-inventory; do kubectl -n $ns rollout restart deploy; done
 kubectl -n dom-orders get pods         # watch: pods stay 1/2 Ready ... why?
 ```
+
 **Expected break #1:** default-deny **egress** blocks sidecar → istiod (15012), so Envoy never gets config. Prove it, then fix:
+
 ```bash
 istioctl proxy-status
 kubectl -n dom-orders logs deploy/orders -c istio-proxy --tail=5      # connection timeouts to istiod
@@ -366,7 +391,9 @@ kubectl -n dom-orders get pods         # 2/2
 istioctl proxy-status                  # SYNCED
 call dom-orders orders http://payments.dom-payments/               # still OK
 ```
+
 **STRICT mTLS** (and the "plain client" test):
+
 ```bash
 kubectl apply -f - <<'EOF'
 apiVersion: security.istio.io/v1
@@ -390,7 +417,9 @@ kubectl run plain --rm -i --restart=Never -q --image=curlimages/curl --image-pul
 kubectl -n dom-payments delete netpol tmp-allow-from-default
 call dom-orders orders http://payments.dom-payments/               # meshed client: OK
 ```
+
 **Identity-based AuthorizationPolicy** — an "intruder" in the *same namespace* as orders (the network layer cannot tell them apart; the identity can):
+
 ```bash
 kubectl apply -f - <<'EOF'
 apiVersion: v1
@@ -422,6 +451,7 @@ EOF
 call dom-orders orders   http://payments.dom-payments/     # OK
 call dom-orders intruder http://payments.dom-payments/     # "403 Forbidden" (RBAC: access denied) — network allowed, identity not
 ```
+
 Hints: `istioctl analyze -A`; `istioctl x describe pod <pod> -n dom-orders`; `kubectl -n dom-payments logs deploy/payments -c istio-proxy`.
 **Nuance revealed:** two guards, two failure signatures: **timeout** (NetworkPolicy) vs **403** (AuthorizationPolicy) vs **reset** (STRICT mTLS vs plaintext).
 **Gate G-K7:** for each of the three failures, name the layer without running a command.
@@ -433,6 +463,7 @@ Hints: `istioctl analyze -A`; `istioctl x describe pod <pod> -n dom-orders`; `ku
 **Goal:** `app` + `istio-proxy` (injected) + `fluent-bit` + `otel-collector` in one pod; everything lands in **one central place** (stand-in for Cloud Logging bucket + sink).
 
 ### 8a. Central aggregator (the "log bucket")
+
 ```bash
 kubectl apply -f - <<'EOF'
 apiVersion: v1
@@ -475,7 +506,9 @@ spec:
   ports: [{ name: tcp-forward, port: 24224, targetPort: 24224 }]
 EOF
 ```
+
 ### 8b. The 4-container pod in `dom-orders`
+
 ```bash
 kubectl apply -f - <<'EOF'
 apiVersion: v1
@@ -557,7 +590,9 @@ spec:
 EOF
 kubectl -n dom-orders get pod -l app=logdemo -o jsonpath='{.items[0].spec.containers[*].name}{"\n"}'   # app fluent-bit otel-collector istio-proxy
 ```
+
 **Expected break #2:** the fluent-bit sidecar cannot reach the aggregator (default-deny egress from `dom-orders`). Fix by allowing it, then watch the central log:
+
 ```bash
 kubectl apply -f - <<'EOF'
 apiVersion: networking.k8s.io/v1
@@ -574,7 +609,9 @@ kubectl -n dom-orders logs deploy/logdemo -c otel-collector --tail=5        # "T
 kubectl -n observability logs deploy/log-aggregator --tail=5                # JSON lines with "domain":"orders" = file-tail path alive
 kubectl -n dom-orders logs deploy/logdemo -c app --tail=3                   # stdout path (what the GKE node agent would ship)
 ```
+
 Exercises:
+
 - Turn this pod spec into the **Helm chart** `acme-microservice` (plan P7a): `helm create acme-microservice`, delete the defaults, keep `values.yaml` toggles `sidecars.otel.enabled`, `sidecars.fluentbit.enabled`, `domain`, `image.*`; verify with `helm lint` and `helm template . --set domain=payments | kubectl apply --dry-run=client -f -`.
 - Add the same pod to `dom-payments` with `domain=payments` and filter by the `domain` field at the aggregator.
 - Real images: build your own Go/Python/Node service and `docker build` → `kind load docker-image` (the local stand-in for Artifact Registry).
@@ -614,10 +651,11 @@ kubectl -n dom-payments get svc payments-lb       # EXTERNAL-IP from 10.10.0.240
 LB=$(kubectl -n dom-payments get svc payments-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
 docker exec probe curl -s -m4 -o /dev/null -w '%{http_code}\n' http://$LB/
 ```
+
 Expected breaks (diagnose each by symptom, then fix):
 
 | # | Symptom from `probe` | Layer | Fix |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 1 | timeout | **router firewall** (K3 `FORWARD DROP`) | `iptables -A FORWARD -s 10.10.1.3 -d $LB -p tcp --dport 80 -j ACCEPT` (+ established rule) |
 | 2 | timeout (router now open) | **NetworkPolicy** ingress deny on `dom-payments` | add ingress from `ipBlock 10.10.1.0/28` on pod port 8080 |
 | 3 | connection reset | **STRICT mTLS** vs plaintext client (an LB speaks plaintext) | workload-level `PeerAuthentication` with `portLevelMtls: { 8080: { mode: PERMISSIVE } }` (needs `selector.matchLabels app: payments`) |
@@ -641,8 +679,10 @@ flux bootstrap gitlab --hostname=gitlab.com \
   --branch=main --path=clusters/kind --token-auth       # add --personal if the owner is a user, not a group
 flux get kustomizations -A
 ```
+
 Repo layout:
-```
+
+```text
 clusters/kind/
   flux-system/                    (generated)
   10-infra-controllers.yaml
@@ -652,7 +692,9 @@ infrastructure/controllers/   sources.yaml  istio-base.yaml  istiod.yaml  metall
 infrastructure/configs/       namespaces.yaml  netpol.yaml  mesh-policy.yaml  metallb-pool.yaml
 apps/kind/                    observability.yaml  orders.yaml  payments.yaml  inventory.yaml
 ```
+
 `clusters/kind/10-infra-controllers.yaml`
+
 ```yaml
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
@@ -686,7 +728,9 @@ spec:
   prune: true
   sourceRef: { kind: GitRepository, name: flux-system }
 ```
+
 `infrastructure/controllers/sources.yaml` + Istio releases (MetalLB analogous, chart repo `https://metallb.github.io/metallb`, chart `metallb`)
+
 ```yaml
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: HelmRepository
@@ -713,12 +757,15 @@ spec:
   values:
     meshConfig: { accessLogFile: /dev/stdout, accessLogEncoding: JSON }
 ```
+
 Migration exercise (do it in this order):
+
 1. Commit the K5 namespaces (with `istio-injection: enabled` label), K6/K7 policies and K9 pool into `configs/`, the Deployments into `apps/kind/`; commit the controllers into `controllers/`.
 2. `kubectl delete` the manually-applied objects (or recreate the cluster from K1) and watch: `flux get ks -A -w`, `flux tree ks apps`, `flux events`.
 3. After each change: `flux reconcile ks apps --with-source`.
 
 **Break-it exercises (the point of this lab):**
+
 - Remove `dependsOn` from `infra-configs` → the pool fails with *"no matches for kind IPAddressPool"* (CRDs not yet installed). Put it back.
 - Create the namespaces **after** the Deployments (move the label out) → pods start **without a sidecar**; restart them to fix. This is the plan's G5.
 - Remove `wait: true` from controllers → dependants start before istiod is ready.
@@ -729,7 +776,7 @@ Migration exercise (do it in this order):
 ## K11 — Stretch (local versions of the GCP stretch menu)
 
 | Idea | How locally | GCP twin |
-|---|---|---|
+| --- | --- | --- |
 | **Two clusters / two VPCs** | second kind cluster on `acme-ops` network with different pod/service CIDRs, router between them | S2 hybrid, overlapping-CIDR pain |
 | **Per-domain node pool** | label workers `pool=orders` etc., `nodeSelector` + taints per domain | S3 |
 | **Egress with a fixed IP** | Cilium Egress Gateway (check current docs for status/requirements) | Cloud NAT static IPs |
@@ -742,7 +789,7 @@ Migration exercise (do it in this order):
 ## Gates summary (predict first, then verify)
 
 | Gate | You can… |
-|---|---|
+| --- | --- |
 | G-K1 | explain why CIDRs must not overlap (node / pod / service / peer) |
 | G-K2 | fill the IPAM table from memory |
 | G-K3 | predict each `curl` result across firewall changes |
@@ -761,7 +808,7 @@ When all ten pass, repeat on GCP (plan P3–P9). Expect only the cloud-specific 
 ## Troubleshooting
 
 | Symptom | Likely cause |
-|---|---|
+| --- | --- |
 | Nodes `NotReady` after create | CNI not installed yet (K1) |
 | Cilium pods CrashLoop | old kernel / Docker VM without eBPF → Calico fallback |
 | Pods `ImagePullBackOff` after K4 | default route removed; image not `kind load`-ed |
@@ -772,6 +819,7 @@ When all ten pass, repeat on GCP (plan P3–P9). Expect only the cloud-specific 
 | `flux bootstrap` fails | token scope, group path, or `--personal` mismatch |
 
 ## Teardown
+
 ```bash
 flux uninstall --silent 2>/dev/null          # optional
 kind delete cluster --name acme

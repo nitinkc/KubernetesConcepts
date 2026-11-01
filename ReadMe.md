@@ -28,3 +28,12 @@ minikube delete --all --purge
 minikube start --driver=docker
 
 ```
+
+## Local Setup
+
+```shell
+uv venv
+uv pip install -r requirements.txt
+
+```
+

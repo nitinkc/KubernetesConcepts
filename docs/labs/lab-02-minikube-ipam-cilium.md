@@ -8,7 +8,7 @@
 ## 1. Architecture Decision: IPAM & CNI Wiring
 
 | Decision Point | Choice Made | Why It Matters on GCP GKE |
-|---|---|---|
+| --- | --- | --- |
 | **How are Pod IPs allocated?** | `kube-controller-manager` carves `10.20.0.0/20` into `/24` per-node slices (`node.spec.podCIDR`), and Cilium runs with `ipam.mode=kubernetes`. | On GKE VPC-Native clusters, GKE carves the `gke-pods` secondary range (`10.20.0.0/20`) into per-node alias IP ranges based on `max_pods_per_node`. Using `ipam.mode=kubernetes` locally ensures your pods get `10.20.x.x` IPs instead of Cilium's private `10.0.x.x` default pool! |
 | **Why install Cilium via Helm instead of `minikube start --cni=cilium`?** | Start Minikube with `--cni=bridge` (or minimal CNI), then install Cilium via Helm with `hubble.relay.enabled=true`. | Minikube's built-in `--cni=cilium` manifest uses `cluster-pool` IPAM (ignoring `10.20.0.0/20`) and disables Hubble. Installing via Helm gives you **exact CIDR parity** + **`hubble observe`** for L3/L4 packet debugging. |
 | **Why 3 Nodes (`acme`, `acme-m02`, `acme-m03`)?** | 1 Control Plane (`10.10.0.10`) + 2 Workers (`acme-m02`, `acme-m03`). | Lets you test cross-node pod traffic (Lab 02), and in Lab 04 we will label `acme-m03` with `allowed-open-nat=true` (Door 3) while keeping `acme-m02` locked down. |
@@ -20,6 +20,7 @@
 ![Three address spaces — node / pod / service](../diagrams/lab02-address-spaces.drawio.svg)
 
 ### CIDR Capacity Math (Do This Before Every Cluster Build)
+
 * **Pod CIDR:** `10.20.0.0/20` = $2^{32-20} = 4,096$ total IPs.
 * **Per-Node Slice (Default `/24`):** $2^{32-24} = 256$ IPs per node → $\frac{4096}{256} =$ **16 nodes maximum**.
 * **GKE Optimization (`max_pods_per_node = 64`):** GKE allocates a `/25` ($128$ IPs,always $2 \times \text{max\_pods}$) per node → $\frac{4096}{128} =$ **32 nodes maximum**.
@@ -153,6 +154,7 @@ docker exec probe curl -sk https://10.10.0.10:8443/version
 ## 4. Deliberate Break & Triage Drills
 
 ### Drill 1: Trace Cross-Node Pod Encapsulation with `tcpdump`
+
 Let's see how a pod on `acme-m02` (`10.20.1.x`) talks to a pod on `acme-m03` (`10.20.2.x`):
 
 ```bash
@@ -179,6 +181,7 @@ kubectl delete pod pod-m02 pod-m03 --wait=false
 ## 5. Readiness Gate G-02
 
 Verify you can answer from memory:
+
 1. Why can a second cluster on the same VPC **never** share `10.20.0.0/20` if the networks are routed together? *(Both clusters allocate overlapping `10.20.0.x` pod IPs; return traffic routes to the wrong cluster).*
 2. Which Kubernetes component assigns `10.20.1.0/24` to `acme-m02`, and which component assigns `10.20.1.15` to an individual Pod on that node? *(`kube-controller-manager` assigns the `/24` `podCIDR` to the Node object; the local CNI IPAM plugin on `acme-m02` assigns individual IPs from that `/24` to Pods).*
 

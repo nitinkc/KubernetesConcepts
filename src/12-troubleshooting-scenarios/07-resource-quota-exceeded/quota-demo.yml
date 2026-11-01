@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: quota-demo
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: pod-quota
+  namespace: quota-demo
+spec:
+  hard:
+    pods: "2" # namespace is capped at 2 pods
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quota-app
+  namespace: quota-demo
+spec:
+  replicas: 3 # asks for 3 pods, quota only allows 2
+  selector:
+    matchLabels:
+      app: quota-app
+  template:
+    metadata:
+      labels:
+        app: quota-app
+    spec:
+      containers:
+        - name: nginx
+          image: nginx

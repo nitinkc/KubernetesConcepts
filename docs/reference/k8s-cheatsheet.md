@@ -6,6 +6,7 @@ config file has a setting called the `current-context`. Whenever you type `kubec
 reads whatever name is set as the current-context, and sends your command to that specific cluster.
 
 get the version (no `--` involved)
+
 ```shell
 kubectl version 
 ```
@@ -18,12 +19,14 @@ file for you:
 - **GCP / GKE (`gcloud container clusters get-credentials my-gke-cluster`):** Downloads the cloud credentials, adds a context for your GKE cluster, and automatically makes it your current-context.
 
 See what cluster you are currently talking to:
+
 ```shell
 kubectl config current-context
 kubectl config get-contexts
 ```
 
 Manually switch between clusters:
+
 ```shell
 kubectl config use-context minikube
 # or
@@ -33,6 +36,7 @@ kubectl config use-context gke_my-project_us-central1_my-cluster
 ```
 
 ## Common commands
+
 ```shell
 kubectl get --help # See all possible combinations
 kubectl get nodes
@@ -42,6 +46,7 @@ kubectl get nodes -w --watch=false
 ## Yaml files
 
 4 important blocks
+
 - apiVersion: 
 - kind: Pod, ReplicaSet
 - metadata:

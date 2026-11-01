@@ -1,0 +1,95 @@
+# seed — one Job, two databases. Idempotent: safe to re-run (Flux depends on this).
+# Creates per-service roles, schemas, tables, grants, and demo items.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-seed
+  namespace: dom-data
+spec:
+  backoffLimit: 4
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: psql
+          image: postgres:16-alpine # ships psql; no extra image needed
+          env:
+            - name: PGUSER
+              value: postgres
+            - name: COMMERCE_PW
+              valueFrom:
+                secretKeyRef: { name: commerce-db-auth, key: POSTGRES_PASSWORD }
+            - name: PAYMENTS_PW
+              valueFrom:
+                secretKeyRef: { name: payments-db-auth, key: POSTGRES_PASSWORD }
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              echo "== seeding commerce-db =="
+              PGPASSWORD="$COMMERCE_PW" psql -h commerce-db -d commerce <<'SQL'
+              -- roles (idempotent: ALTER keeps password in sync on re-run)
+              DO $$ BEGIN
+                IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='orders_rw')    THEN CREATE ROLE orders_rw    LOGIN PASSWORD 'orders-demo-pw'; END IF;
+                IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='inventory_rw') THEN CREATE ROLE inventory_rw LOGIN PASSWORD 'inventory-demo-pw'; END IF;
+              END $$;
+
+              CREATE SCHEMA IF NOT EXISTS inventory;
+              CREATE SCHEMA IF NOT EXISTS sales;
+
+              CREATE TABLE IF NOT EXISTS inventory.items (
+                id    SERIAL PRIMARY KEY,
+                sku   TEXT UNIQUE NOT NULL,
+                name  TEXT NOT NULL,
+                stock INT  NOT NULL CHECK (stock >= 0),
+                price NUMERIC(10,2) NOT NULL
+              );
+              CREATE TABLE IF NOT EXISTS sales.orders (
+                id         SERIAL PRIMARY KEY,
+                item_id    INT REFERENCES inventory.items(id),
+                qty        INT NOT NULL,
+                amount     NUMERIC(10,2) NOT NULL,
+                status     TEXT NOT NULL,          -- pending | confirmed | cancelled
+                payment_id INT,
+                created_at TIMESTAMPTZ DEFAULT now()
+              );
+
+              -- inventory_rw owns the catalog schema
+              GRANT USAGE ON SCHEMA inventory TO inventory_rw;
+              GRANT SELECT, INSERT, UPDATE ON inventory.items TO inventory_rw;
+              GRANT USAGE, SELECT ON SEQUENCE inventory.items_id_seq TO inventory_rw;
+
+              -- orders_rw writes BOTH schemas -> the shared-schema tension.
+              -- UPDATE on inventory.items is what lets "orders reduce inventory".
+              GRANT USAGE ON SCHEMA inventory TO orders_rw;
+              GRANT SELECT, UPDATE ON inventory.items TO orders_rw;
+              GRANT USAGE ON SCHEMA sales TO orders_rw;
+              GRANT SELECT, INSERT, UPDATE ON sales.orders TO orders_rw;
+              GRANT USAGE, SELECT ON SEQUENCE sales.orders_id_seq TO orders_rw;
+
+              INSERT INTO inventory.items (sku, name, stock, price) VALUES
+                ('WIDGET-1', 'Acme Widget',    50, 19.99),
+                ('GADGET-2', 'Acme Gadget',    20, 49.00),
+                ('GIZMO-3',  'Acme Gizmo',      5, 99.99)   -- price ends .99 -> always declined!
+              ON CONFLICT (sku) DO NOTHING;
+              SQL
+
+              echo "== seeding payments-db =="
+              PGPASSWORD="$PAYMENTS_PW" psql -h payments-db -d payments <<'SQL'
+              DO $$ BEGIN
+                IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='payments_rw') THEN CREATE ROLE payments_rw LOGIN PASSWORD 'payments-demo-pw'; END IF;
+              END $$;
+
+              CREATE TABLE IF NOT EXISTS payments (
+                id         SERIAL PRIMARY KEY,
+                order_id   INT NOT NULL,
+                amount     NUMERIC(10,2) NOT NULL,
+                status     TEXT NOT NULL,          -- confirmed | declined
+                created_at TIMESTAMPTZ DEFAULT now()
+              );
+
+              GRANT SELECT, INSERT ON payments TO payments_rw;
+              GRANT USAGE, SELECT ON SEQUENCE payments_id_seq TO payments_rw;
+              SQL
+              echo "== seed complete =="

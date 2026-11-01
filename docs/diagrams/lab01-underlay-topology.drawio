@@ -4,59 +4,74 @@
       <root>
         <mxCell id="0"/>
         <mxCell id="1" parent="0"/>
-        <mxCell id="title" value="Lab 01 — Underlay: two Docker bridge subnets joined by a dual-homed router + stateful firewall" style="text;html=1;fillColor=#ffffff;fontSize=14;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
-          <mxGeometry x="40" y="8" width="900" height="24" as="geometry"/>
+        <mxCell id="title" value="Lab 01 — Underlay: two private subnets joined by a dual-homed router + stateful firewall — trace hops ①→④ clockwise" style="text;html=1;fillColor=#ffffff;fontSize=14;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="40" y="8" width="1100" height="24" as="geometry"/>
         </mxCell>
-        <mxCell id="ops" value="&lt;b&gt;Docker bridge: acme-ops · 10.10.1.0/28&lt;/b&gt;&lt;br/&gt;gw 10.10.1.1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;align=left;spacingLeft=8;spacingTop=4;fontSize=11;container=1;" vertex="1" parent="1">
-          <mxGeometry x="40" y="60" width="260" height="420" as="geometry"/>
+        <mxCell id="ops" value="&lt;b&gt;acme-ops — Docker bridge subnet · 10.10.1.0/28&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;gw 10.10.1.1 · admin traffic enters here · GCP twin → private subnet 'ops'&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;align=left;spacingLeft=8;spacingTop=4;fontSize=11;container=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="56" width="270" height="400" as="geometry"/>
         </mxCell>
-        <mxCell id="probe" value="&lt;b&gt;probe&lt;/b&gt; (nicolaka/netshoot)&lt;br/&gt;10.10.1.3&lt;br/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Bastion / test client&lt;br/&gt;route: 10.10.0.0/24 via 10.10.1.2&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontSize=10;align=left;spacingLeft=6;" vertex="1" parent="ops">
-          <mxGeometry x="25" y="80" width="210" height="90" as="geometry"/>
+        <mxCell id="probe" value="&lt;b&gt;probe&lt;/b&gt; · bastion / test client&lt;br/&gt;(nicolaka/netshoot)&lt;br/&gt;&lt;b&gt;10.10.1.3&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;route table:&lt;br/&gt;10.10.0.0/24 → via 10.10.1.2 ← used by hop ①&lt;br/&gt;default → 10.10.1.1 (docker bridge)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontSize=10;align=left;spacingLeft=6;" vertex="1" parent="ops">
+          <mxGeometry x="30" y="168" width="210" height="110" as="geometry"/>
         </mxCell>
         <mxCell id="router" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;verticalAlign=top;align=center;spacingTop=4;fontSize=11;container=1;" vertex="1" parent="1">
-          <mxGeometry x="470" y="60" width="240" height="420" as="geometry"/>
+          <mxGeometry x="430" y="56" width="400" height="400" as="geometry"/>
         </mxCell>
-        <mxCell id="rtitle" value="&lt;b&gt;vpc-router container&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;net.ipv4.ip_forward=1 · NET_ADMIN&lt;/font&gt;" style="text;html=1;fillColor=#ffffff;fontSize=11;fontColor=#7a1f1f;align=center;" vertex="1" parent="router">
-          <mxGeometry x="10" y="6" width="220" height="36" as="geometry"/>
+        <mxCell id="rtitle" value="&lt;b&gt;vpc-router — one container, two NICs (dual-homed)&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;net.ipv4.ip_forward=1 · NET_ADMIN · GCP twin → routes + stateful firewall&lt;/font&gt;" style="text;html=1;fillColor=#ffffff;fontSize=11;fontColor=#7a1f1f;align=center;" vertex="1" parent="router">
+          <mxGeometry x="10" y="8" width="380" height="40" as="geometry"/>
         </mxCell>
-        <mxCell id="reth1" value="&lt;b&gt;eth1&lt;/b&gt;&lt;br/&gt;10.10.1.2/28" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#b85450;fontSize=10;" vertex="1" parent="router">
-          <mxGeometry x="20" y="103" width="200" height="44" as="geometry"/>
+        <mxCell id="reth1" value="&lt;b&gt;eth1&lt;/b&gt;&lt;br/&gt;10.10.1.2/28&lt;br/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;faces acme-ops&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#b85450;fontSize=10;" vertex="1" parent="router">
+          <mxGeometry x="15" y="180" width="85" height="70" as="geometry"/>
         </mxCell>
-        <mxCell id="rfwd" value="&lt;b&gt;iptables FORWARD&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;-P FORWARD DROP&lt;br/&gt;conntrack ESTABLISHED,RELATED → ACCEPT&lt;br/&gt;icmp → ACCEPT&lt;br/&gt;+ explicit allows (8443, 80)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#b85450;fontSize=10;align=left;spacingLeft=6;" vertex="1" parent="router">
-          <mxGeometry x="20" y="165" width="200" height="96" as="geometry"/>
+        <mxCell id="rfw" value="&lt;b&gt;🛡 stateful firewall&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;iptables FORWARD — both ways&lt;br/&gt;-P FORWARD DROP&lt;br/&gt;ESTABLISHED,RELATED → ACCEPT&lt;br/&gt;icmp → ACCEPT&lt;br/&gt;+ explicit port allows&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#b85450;fontSize=10;align=left;spacingLeft=6;" vertex="1" parent="router">
+          <mxGeometry x="110" y="160" width="180" height="110" as="geometry"/>
         </mxCell>
-        <mxCell id="rnotes" value="&lt;font style=&quot;font-size:9px&quot;&gt;GCP twin: VPC routes +&lt;br/&gt;stateful firewall rules&lt;/font&gt;" style="text;html=1;fillColor=#ffffff;fontSize=9;fontColor=#7a1f1f;align=center;" vertex="1" parent="router">
-          <mxGeometry x="20" y="272" width="200" height="36" as="geometry"/>
+        <mxCell id="reth0" value="&lt;b&gt;eth0&lt;/b&gt;&lt;br/&gt;10.10.0.250/24&lt;br/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;faces acme-main&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#b85450;fontSize=10;" vertex="1" parent="router">
+          <mxGeometry x="305" y="180" width="85" height="70" as="geometry"/>
         </mxCell>
-        <mxCell id="reth0" value="&lt;b&gt;eth0&lt;/b&gt;&lt;br/&gt;10.10.0.250/24" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#b85450;fontSize=10;" vertex="1" parent="router">
-          <mxGeometry x="20" y="320" width="200" height="44" as="geometry"/>
-        </mxCell>
-        <mxCell id="main" value="&lt;b&gt;Docker bridge: acme-main · 10.10.0.0/24&lt;/b&gt;&lt;br/&gt;gw 10.10.0.1 (NAT → internet)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;align=left;spacingLeft=8;spacingTop=4;fontSize=11;container=1;" vertex="1" parent="1">
-          <mxGeometry x="880" y="60" width="300" height="420" as="geometry"/>
-        </mxCell>
-        <mxCell id="reg" value="&lt;b&gt;registry:2&lt;/b&gt;&lt;br/&gt;10.10.0.200:5000&lt;br/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Door 1 — Artifact Registry twin&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=10;align=left;spacingLeft=6;" vertex="1" parent="main">
-          <mxGeometry x="25" y="60" width="250" height="56" as="geometry"/>
-        </mxCell>
-        <mxCell id="reserved" value="&lt;b&gt;reserved for Minikube nodes&lt;/b&gt;&lt;br/&gt;.10 acme (control-plane) · .11 acme-m02&lt;br/&gt;.12 acme-m03&lt;br/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;MetalLB VIPs: .240–249&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f0f8;strokeColor=#6c8ebf;dashed=1;fontSize=10;align=left;spacingLeft=6;" vertex="1" parent="main">
-          <mxGeometry x="25" y="150" width="250" height="70" as="geometry"/>
-        </mxCell>
-        <mxCell id="echo" value="&lt;b&gt;echo&lt;/b&gt; (nginx:alpine)&lt;br/&gt;10.10.0.201:80&lt;br/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;logs client source IP — proves pod SNAT&lt;br/&gt;return route: 10.10.1.0/28 via 10.10.0.250&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=10;align=left;spacingLeft=6;" vertex="1" parent="main">
-          <mxGeometry x="25" y="302" width="250" height="80" as="geometry"/>
-        </mxCell>
-        <mxCell id="e1" value="1 · forward: 10.10.0.0/24 via 10.10.1.2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2e7d32;strokeWidth=2;fontSize=9;labelBackgroundColor=#ffffff;exitX=1;exitY=0.333;entryX=0;entryY=0.159;" edge="1" source="probe" target="reth1" parent="1">
+        <mxCell id="ri1" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#b85450;strokeWidth=1;dashed=1;" edge="1" source="reth1" target="rfw" parent="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e4" value="4 · reply delivered" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#6c8ebf;strokeWidth=2;dashed=1;fontSize=9;labelBackgroundColor=#ffffff;exitX=0;exitY=0.84;entryX=1;entryY=0.667;" edge="1" source="reth1" target="probe" parent="1">
+        <mxCell id="ri2" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#b85450;strokeWidth=1;dashed=1;" edge="1" source="rfw" target="reth0" parent="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e2" value="2 · L2 delivery on acme-main" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2e7d32;strokeWidth=2;fontSize=9;labelBackgroundColor=#ffffff;exitX=1;exitY=0.227;entryX=0;entryY=0.35;" edge="1" source="reth0" target="echo" parent="1">
+        <mxCell id="rcap" value="&lt;font style=&quot;font-size:9px&quot;&gt;Every cross-subnet packet enters one NIC,&lt;br/&gt;passes the FORWARD chain, exits the other NIC.&lt;/font&gt;" style="text;html=1;fillColor=#ffffff;fontSize=9;fontColor=#7a1f1f;align=center;" vertex="1" parent="router">
+          <mxGeometry x="20" y="330" width="360" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="main" value="&lt;b&gt;acme-main — Docker bridge subnet · 10.10.0.0/24&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;gw 10.10.0.1 · the cluster side · GCP twin → private subnet 'gke-main'&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;align=left;spacingLeft=8;spacingTop=4;fontSize=11;container=1;" vertex="1" parent="1">
+          <mxGeometry x="960" y="56" width="280" height="400" as="geometry"/>
+        </mxCell>
+        <mxCell id="reg" value="&lt;b&gt;registry:2&lt;/b&gt; · 10.10.0.200:5000&lt;br/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Door 1 — Artifact Registry twin&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=10;align=left;spacingLeft=6;" vertex="1" parent="main">
+          <mxGeometry x="15" y="46" width="250" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="reserved" value="&lt;b&gt;reserved for Minikube nodes&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;.10 acme (control-plane) · .11 acme-m02 · .12 acme-m03&lt;br/&gt;MetalLB VIPs: .240–.249&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f0f8;strokeColor=#6c8ebf;dashed=1;fontSize=10;align=left;spacingLeft=6;" vertex="1" parent="main">
+          <mxGeometry x="15" y="120" width="250" height="64" as="geometry"/>
+        </mxCell>
+        <mxCell id="echo" value="&lt;b&gt;echo&lt;/b&gt; (nginx:alpine)&lt;br/&gt;&lt;b&gt;10.10.0.201:80&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;logs client source IP — proves pod SNAT&lt;br/&gt;route table: 10.10.1.0/28 → via 10.10.0.250&lt;br/&gt;← the return route, used by hop ③&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=10;align=left;spacingLeft=6;" vertex="1" parent="main">
+          <mxGeometry x="15" y="200" width="250" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="gw" value="&lt;b&gt;docker bridge gw · 10.10.0.1&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;echo's default route — without hop ③'s route,&lt;br/&gt;replies fall back here and are lost ✗&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffebee;strokeColor=#c62828;dashed=1;fontSize=10;align=left;spacingLeft=6;" vertex="1" parent="main">
+          <mxGeometry x="15" y="318" width="250" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" value="① route: 10.10.0.0/24 → next-hop 10.10.1.2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2e7d32;strokeWidth=2;fontSize=9;labelBackgroundColor=#ffffff;exitX=1;exitY=0.25;entryX=0;entryY=0.25;" edge="1" source="probe" target="reth1" parent="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e3" value="3 · reply: 10.10.1.0/28 via 10.10.0.250" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#6c8ebf;strokeWidth=2;dashed=1;fontSize=9;labelBackgroundColor=#ffffff;exitX=0;exitY=0.7;entryX=1;entryY=0.864;" edge="1" source="echo" target="reth0" parent="1">
+        <mxCell id="e2" value="② router forwards onto acme-main" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2e7d32;strokeWidth=2;fontSize=9;labelBackgroundColor=#ffffff;exitX=1;exitY=0.25;entryX=0;entryY=0.2;" edge="1" source="reth0" target="echo" parent="1">
+          <mxGeometry x="-0.35" relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" value="③ reply: 10.10.1.0/28 → via 10.10.0.250" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#1565c0;strokeWidth=2;dashed=1;fontSize=9;labelBackgroundColor=#ffffff;exitX=0;exitY=0.82;entryX=1;entryY=0.8;" edge="1" source="echo" target="reth0" parent="1">
+          <mxGeometry x="0.4" relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" value="④ reply forwarded back to probe ✓" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#1565c0;strokeWidth=2;dashed=1;fontSize=9;labelBackgroundColor=#ffffff;exitX=0;exitY=0.8;entryX=1;entryY=0.82;" edge="1" source="reth1" target="probe" parent="1">
           <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" value="✗ missing return route → LOST" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#c62828;strokeWidth=1.5;dashed=1;fontSize=9;fontColor=#c62828;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" source="echo" target="gw" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="legend" value="&lt;b&gt;How to read:&lt;/b&gt; &lt;font color=&quot;#2e7d32&quot;&gt;— solid green = request hops ①②&lt;/font&gt; · &lt;font color=&quot;#1565c0&quot;&gt;- - dashed blue = reply hops ③④&lt;/font&gt; · &lt;font color=&quot;#c62828&quot;&gt;- - red = failure path (missing return route)&lt;/font&gt;" style="text;html=1;fillColor=#ffffff;fontSize=10;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="40" y="478" width="900" height="20" as="geometry"/>
         </mxCell>
         <mxCell id="warn" value="⚠ Routes inside containers are volatile — re-run scripts/routes.sh after every node/container restart" style="text;html=1;fillColor=#ffffff;fontSize=10;fontColor=#b85450;fontStyle=2;" vertex="1" parent="1">
-          <mxGeometry x="40" y="500" width="760" height="20" as="geometry"/>
+          <mxGeometry x="40" y="502" width="760" height="20" as="geometry"/>
         </mxCell>
       </root>
     </mxGraphModel>

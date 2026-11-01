@@ -1,0 +1,17 @@
+# Setup (run first):  kubectl taint nodes minikube taint=true:NoSchedule
+# Cleanup (after):    kubectl taint nodes minikube taint=true:NoSchedule-
+apiVersion: v1
+kind: Pod
+metadata:
+  name: tainted-pod
+  labels:
+    app: taint-demo
+spec:
+  # tolerations:                # FIX: uncomment to tolerate the node taint
+  #   - key: "taint"
+  #     operator: "Equal"
+  #     value: "true"
+  #     effect: "NoSchedule"
+  containers:
+    - name: nginx
+      image: nginx

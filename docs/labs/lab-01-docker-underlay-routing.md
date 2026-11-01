@@ -1,15 +1,47 @@
 # Lab 01 · Docker Underlay: VPC Subnets, Next-Hop Routing & Stateful Firewalls
 
-> **Core Lesson:** Kubernetes **sits on top of** the network; it cannot create VPCs, subnets, route tables, or cloud firewalls. Before starting Minikube, you will build the underlay network yourself using two Docker bridge subnets, a dual-homed Linux router container (`vpc-router`), and `iptables` connection tracking.  
+> **Core Lesson:** Kubernetes **sits on top of** the network; it cannot create VPCs, subnets, route tables, or cloud firewalls. Before starting Minikube, you will build the underlay network yourself using two Docker bridge subnets, a dual-homed Linux router container (`vpc-router`), and `iptables` connection tracking.
 > **GCP Twin:** Phase P3 (`google_compute_network`, `google_compute_subnetwork`, `google_compute_route`, `google_compute_firewall`, IAP bastion VM).
 
+## Step 0 — The Starting Point: Repos & Folders
+
+One VPC `acme-main` (np) — **both subnets are private**; there is no public subnet because the default internet route is deleted at birth (that's Lab 04):
+
+- `gke-main` `10.10.0.0/24` — the cluster subnet (nodes; pod `10.20.0.0/20` + svc `10.30.0.0/24` are *secondary ranges inside it*, not separate subnets)
+- `ops` `10.10.1.0/28` — the bastion/probe subnet; admin traffic enters here and must route + pass firewall to reach the cluster
+
+Everything the labs build lives in one of two places — **this repo** (the lab site + runnable manifests) and **`~/acme-k8s-lab`** (your scratch dir for generated artifacts). On GCP, each piece maps to a real GitLab project:
+
+```text
+KubernetesConcepts/                 ← this repo (lab docs + runnable manifests)
+├─ apps/orders  apps/payments  apps/inventory     # the 3 domain microservices
+├─ apps/data/                                     # dom-data tier: Postgres + secrets + seed Job
+├─ charts/acme-microservice/                      # vendored Tier-2 Helm chart
+└─ src/1-pods … src/12-troubleshooting-scenarios  # concept manifest library
+
+~/acme-k8s-lab/                     ← your scratch dir (nothing here is committed)
+├─ charts/acme-microservice/        # the chart YOU author in Lab 03
+├─ gitops/                          # clusters/local + infrastructure/{controllers,configs,data} + apps/local
+└─ scripts/                         # cluster-up.sh, cluster-down.sh, verify-all.sh
+
+gitlab.com/acme-labs-<handle>/      ← the GCP twin: one GitLab PROJECT per box
+├─ platform/          bootstrap · network · gke-platform · observability · terraform-modules · ci-templates
+├─ domain-shared/     shared-services (Cloud SQL) · configurations/helm-charts · configurations/flux-releases
+└─ applications/      orders/{orders-svc,orders-infra} · payments/{…} · inventory/{…}
+
+environments/
+├─ np   = my-devops-journey-502420  → cluster acme-np, pipeline-np SA, flux clusters/np   ← labs build this
+└─ prod = acme-labs-p-<suffix>      → state+SAs only, pipeline-p (protected main) / pipeline-p-ro, flux clusters/p
+```
+
 [RFC 1918 — Address Allocation for Private Internets](https://www.rfc-editor.org/info/rfc1918)
+
 ---
 
 ## 1. Architecture Decision: Where Does Underlay End and Kubernetes Begin?
 
 | Question | Architect's Answer |
-|---|---|
+| --- | --- |
 | **Why build two Docker networks (`acme-main` + `acme-ops`)?** | A single subnet hides routing bugs because every host is L2-adjacent (ARP). Separating the bastion (`acme-ops` `10.10.1.0/28`) from the cluster (`acme-main` `10.10.0.0/24`) forces every admin and ingress packet through a **Layer 3 next hop** and a **stateful firewall**—just like an enterprise Bastion/VPN subnet talking to GKE. |
 | **Why do we need `conntrack ESTABLISHED,RELATED` on the firewall?** | GCP VPC Firewalls are **stateful**: if you allow `probe -> API Server (6443)`, the return packet (`6443 -> probe`) is automatically allowed. Raw `iptables` with `FORWARD DROP` is **stateless** until you explicitly add a `conntrack` rule. Forgetting this creates the classic "one-way ping / asymmetric drop" bug. |
 | **Why pre-deploy a local registry (`10.10.0.200`) and echo server (`10.10.0.201`)?** | In Lab 04, we will delete the default internet route (`0.0.0.0/0`). Having `10.10.0.200:5000` on `acme-main` gives us a local twin of **GCP Artifact Registry over Private Google Access (Door 1)**, and `echo` (`10.10.0.201`) logs client source IPs to prove Pod SNAT/masquerade. |
@@ -27,8 +59,6 @@
 ### Step 1: Create the Two Subnets (`acme-main` & `acme-ops`)
 
 ```bash
-cd ~/acme-k8s-lab
-
 # Create primary cluster subnet (10.10.0.0/24) and ops/bastion subnet (10.10.1.0/28)
 docker network create --driver bridge --subnet 10.10.0.0/24 --gateway 10.10.0.1 acme-main
 docker network create --driver bridge --subnet 10.10.1.0/28 --gateway 10.10.1.1 acme-ops
@@ -39,27 +69,45 @@ docker network inspect acme-main acme-ops \
 ```
 
 **Expected Output:**
+
 ```text
 acme-main: 10.10.0.0/24 (gw 10.10.0.1)
 acme-ops: 10.10.1.0/28 (gw 10.10.1.1)
 ```
 
-notes:
+**Notes:**
 
-In any standard IPv4 subnet (like 10.10.0.0/24), two IP addresses are reserved and cannot be assigned to individual devices, but they aren't for the gateway:1. The Reserved IP AddressesNetwork Address: 10.10.0.0Purpose: Identifies the network itself.Broadcast Address: 10.10.0.255Purpose: Used to send data packets to every device on this subnet simultaneously.Where does the Gateway go?The default gateway (your router) is actually a standard host device on the network. It requires an assignable host IP address.By convention/best practice, network administrators typically assign the default gateway to either:The first usable IP: 10.10.0.1The last usable IP: 10.10.0.254Quick Summary Table for 10.10.0.0/24AddressTypeAssignable to a device?10.10.0.0Network Identifier❌ Reserved10.10.0.1First Usable IP (often assigned to Gateway)✅ Yes10.10.0.2 – 10.10.0.254Usable Host IPs✅ Yes10.10.0.255Broadcast Address❌ Reserved
+In any standard IPv4 subnet (like `10.10.0.0/24`), two IP addresses are reserved and cannot be assigned to individual devices, but they aren't for the gateway:
 
-Gateway (10.10.0.1): Acts as the default router for any container on the acme-main network. When a container needs to talk to the outside world or another network, it sends traffic here.
+- **Network Address: `10.10.0.0`** — identifies the network itself.
+- **Broadcast Address: `10.10.0.255`** — used to send data packets to every device on this subnet simultaneously.
 
-Usable Container IPs (10.10.0.2 through 10.10.0.254): These are the addresses Docker can dynamically assign or statically bind to your containers.
+**Where does the Gateway go?**
 
-Network (10.10.0.0) & Broadcast (10.10.0.255): Still reserved and blocked from assignment, just as discussed.
+The default gateway (your router) is actually a standard host device on the network. It requires an assignable host IP address. By convention/best practice, network administrators typically assign the default gateway to either:
+
+- The first usable IP: `10.10.0.1`
+- The last usable IP: `10.10.0.254`
+
+**Quick Summary Table for `10.10.0.0/24`**
+
+| Address | Type | Assignable to a device? |
+| --- | --- | --- |
+| `10.10.0.0` | Network Identifier | ❌ Reserved |
+| `10.10.0.1` | First Usable IP (often assigned to Gateway) | ✅ Yes |
+| `10.10.0.2` – `10.10.0.254` | Usable Host IPs | ✅ Yes |
+| `10.10.0.255` | Broadcast Address | ❌ Reserved |
+
+- **Gateway (`10.10.0.1`):** Acts as the default router for any container on the `acme-main` network. When a container needs to talk to the outside world or another network, it sends traffic here.
+- **Usable Container IPs (`10.10.0.2` through `10.10.0.254`):** These are the addresses Docker can dynamically assign or statically bind to your containers.
+- **Network (`10.10.0.0`) & Broadcast (`10.10.0.255`):** Still reserved and blocked from assignment, just as discussed.
 
 ---
 
 ### Step 2: Launch `vpc-router`, `probe`, `registry`, and `echo`
 
 ```bash
-# 1. Dual-homed router container with IPv4 forwarding enabled
+# 1. Create ROUTER : Dual-homed router container with IPv4 forwarding enabled
 docker run -d --name vpc-router \
   --cap-add NET_ADMIN \
   --sysctl net.ipv4.ip_forward=1 \
@@ -101,20 +149,30 @@ Right now, `probe` (`10.10.1.3`) only knows its default gateway (`10.10.1.1`). I
 
 ```mermaid
 sequenceDiagram
-    participant P as probe (10.10.1.3)
-    participant R as vpc-router (10.10.1.2 / .0.250)
-    participant E as echo (10.10.0.201)
+    autonumber
+    participant P as probe · 10.10.1.3 (acme-ops)
+    participant R as vpc-router
+    participant E as echo · 10.10.0.201 (acme-main)
+    participant G as docker0 gw · 10.10.0.1
 
-    Note over P,E: Phase 1: Only Forward Route Added (Asymmetric Failure!)
-    P->>R: ICMP Echo Request (src 10.10.1.3 -> dst 10.10.0.201)
-    R->>E: Forwarded to 10.10.0.201
-    E--xP: Reply sent to default gw (10.10.0.1) instead of 10.10.0.250 -> LOST!
+    rect rgb(255, 235, 235)
+        Note over P,G: PHASE 1 — only the forward route exists ⇒ asymmetric path
+        P->>R: ping request — dst 10.10.0.201 via next-hop 10.10.1.2
+        R->>E: forwarded out eth0 (10.10.0.250)
+        Note over E,G: echo has no route to 10.10.1.0/28,<br/>so its reply falls back to the default route
+        E->>G: reply sent to default gw 10.10.0.1
+        G--xP: ✗ lost — docker bridges are isolated
+        Note over P: request arrived, reply never returned → ping timeout
+    end
 
-    Note over P,E: Phase 2: Both Forward & Return Routes Added
-    P->>R: ICMP Echo Request (src 10.10.1.3 -> dst 10.10.0.201)
-    R->>E: Forwarded to 10.10.0.201
-    E->>R: Reply routed via 10.10.0.250 (10.10.1.0/28)
-    R->>P: ICMP Echo Reply Delivered!
+    rect rgb(232, 245, 233)
+        Note over P,G: PHASE 2 — BOTH directions routed ⇒ symmetric path
+        P->>R: ping request — dst 10.10.0.201 via next-hop 10.10.1.2
+        R->>E: forwarded out eth0 (10.10.0.250)
+        Note over E: return route added: 10.10.1.0/28 via 10.10.0.250
+        E->>R: reply sent to next-hop 10.10.0.250
+        R->>P: forwarded out eth1 → ping replies ✓
+    end
 ```
 
 Run this hands-on proof:
@@ -199,6 +257,7 @@ chmod +x ~/acme-k8s-lab/scripts/routes.sh
 Run each break, observe the exact symptom, and restore:
 
 ### Drill 1: The Stateless Firewall Trap (Missing `ESTABLISHED,RELATED`)
+
 ```bash
 # Temporarily allow port 80 from probe -> echo, but DELETE the conntrack rule (Rule #1)
 docker exec vpc-router iptables -A FORWARD -s 10.10.1.3 -d 10.10.0.201 -p tcp --dport 80 -j ACCEPT
@@ -217,6 +276,7 @@ docker exec vpc-router iptables -D FORWARD -s 10.10.1.3 -d 10.10.0.201 -p tcp --
 ## 5. Readiness Gate G-01
 
 Before moving to **Lab 02**, verify you can answer without looking:
+
 1. Why did `ping` fail when only `probe` had a route to `10.10.0.0/24`? *(Packets must route in both directions; `echo` sent replies to `10.10.0.1` instead of `10.10.0.250`).*
 2. What is the difference between `Connection refused` and `Connection timed out (000)` across a firewall? *(`DROP` discards the SYN silently → client waits for timeout; `REJECT` or a closed port with an open firewall sends TCP RST → immediate `Connection refused`).*
 

@@ -1,0 +1,30 @@
+domain: orders
+replicas: 1
+image:
+  repository: nginxinc/nginx-unprivileged
+  tag: alpine
+  pullPolicy: IfNotPresent
+service:
+  port: 80
+  targetPort: 8080
+serviceAccount:
+  gsaEmail: ""   # On GCP: orders-app@my-devops-journey-502420.iam.gserviceaccount.com
+env: {}            # plain env vars, e.g. PAYMENTS_URL
+envFromSecrets: [] # e.g. [db-creds] -> envFrom secretRef, injects DATABASE_URL
+probes:
+  readiness:
+    enabled: false
+    path: /readyz
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 128Mi
+sidecars:
+  fluentbit:
+    enabled: false
+    image: fluent/fluent-bit:3.2
+  otel:
+    enabled: false
+    image: otel/opentelemetry-collector:0.114.0

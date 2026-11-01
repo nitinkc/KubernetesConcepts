@@ -125,24 +125,106 @@ svg text{font-family:Inter,system-ui,sans-serif}
         <rect x="150" y="150" width="82" height="28" rx="4" fill="#1a4470"/><text x="191" y="168" fill="#fff">istio-proxy</text>
         <rect x="62" y="186" width="82" height="28" rx="4" fill="#2c6aa3"/><text x="103" y="204" fill="#fff">otel-collector</text>
         <rect x="150" y="186" width="82" height="28" rx="4" fill="#1f7a4d"/><text x="191" y="204" fill="#fff">fluent-bit</text>
-        <text x="147" y="240" fill="#5b6b7b">GSA &lt;domain&gt;-app (WI)</text><text x="147" y="256" fill="#5b6b7b">default-deny + allows</text></g>
+        <text x="147" y="240" fill="#5b6b7b">GSA &lt;domain&gt;-app (WI)</text><text x="147" y="256" fill="#5b6b7b">default-deny + allows</text><text x="147" y="272" fill="#6b4fa0" font-weight="700">5th: cloud-sql-proxy → Cloud SQL</text></g>
       <use href="#pod1" x="216"/><use href="#pod1" x="432"/>
     </g>
     <rect x="42" y="300" width="654" height="58" rx="8" fill="#f6f8fb" stroke="#8aa0b5"/>
     <text x="52" y="320" font-size="11" font-weight="700" fill="#1a4470">Platform namespaces (Flux-managed)</text>
-    <text x="52" y="340" font-size="11" fill="#5b6b7b">flux-system · istio-system (istiod) · gateway (gke-l7-rilb → proxy-only 10.10.254.0/23) · kube-system</text>
+    <text x="52" y="340" font-size="11" fill="#5b6b7b">flux-system · istio-system (istiod) · gateway (gke-l7-rilb → proxy-only 10.10.254.0/23) · kube-system · dom-data (Postgres → Cloud SQL twin)</text>
     <rect x="30" y="378" width="330" height="38" rx="6" fill="#fff" stroke="#8aa0b5"/><text x="40" y="402" font-size="11" fill="#1c2733">Router + NAT (2 static IPs) · routes · private DNS zones</text>
     <rect x="372" y="378" width="334" height="38" rx="6" fill="#fff" stroke="#8aa0b5"/><text x="382" y="402" font-size="11" fill="#1c2733">Firewall: IAP ssh · LB health · proxy→nodes · master→webhooks</text>
     <!-- right services -->
-    <rect x="745" y="50" width="235" height="62" rx="8" fill="#eef7f1" stroke="#1f7a4d" stroke-width="2"/><text x="758" y="73" font-size="12" font-weight="700" fill="#1f7a4d">Cloud Logging</text><text x="758" y="92" font-size="11" fill="#1c2733">_Default → sink → central-app-logs</text>
-    <rect x="745" y="130" width="235" height="50" rx="8" fill="#fff" stroke="#2c6aa3" stroke-width="2"/><text x="758" y="152" font-size="12" font-weight="700" fill="#2c6aa3">Artifact Registry</text><text x="758" y="168" font-size="11" fill="#1c2733">apps + dockerhub-mirror</text>
-    <rect x="745" y="198" width="235" height="50" rx="8" fill="#fff" stroke="#2c6aa3" stroke-width="2"/><text x="758" y="220" font-size="12" font-weight="700" fill="#2c6aa3">Trace · Monitoring</text><text x="758" y="236" font-size="11" fill="#1c2733">via OTel googlecloud exporter</text>
-    <rect x="745" y="266" width="235" height="50" rx="8" fill="#fff4ee" stroke="#e8622a" stroke-width="2"/><text x="758" y="288" font-size="12" font-weight="700" fill="#e8622a">GitLab.com</text><text x="758" y="304" font-size="11" fill="#1c2733">Flux source · CI + OIDC (via NAT)</text>
-    <rect x="745" y="334" width="235" height="82" rx="8" fill="#f6f8fb" stroke="#8aa0b5"/><text x="758" y="356" font-size="12" font-weight="700" fill="#1a4470">GCS state buckets</text><text x="758" y="374" font-size="11" fill="#1c2733">np / p tfstate · versioned</text><text x="758" y="392" font-size="11" fill="#1c2733">Prod project: state + SAs only</text>
+    <rect x="745" y="50" width="235" height="58" rx="8" fill="#eef7f1" stroke="#1f7a4d" stroke-width="2"/><text x="758" y="72" font-size="12" font-weight="700" fill="#1f7a4d">Cloud Logging</text><text x="758" y="90" font-size="11" fill="#1c2733">_Default → sink → central-app-logs</text>
+    <rect x="745" y="114" width="235" height="46" rx="8" fill="#fff" stroke="#2c6aa3" stroke-width="2"/><text x="758" y="134" font-size="12" font-weight="700" fill="#2c6aa3">Artifact Registry</text><text x="758" y="150" font-size="11" fill="#1c2733">apps + dockerhub-mirror</text>
+    <rect x="745" y="166" width="235" height="70" rx="8" fill="#f4effb" stroke="#6b4fa0" stroke-width="2"/><text x="758" y="186" font-size="12" font-weight="700" fill="#6b4fa0">Cloud SQL · PSA 100.64.0.0/20</text><text x="758" y="204" font-size="11" fill="#1c2733">commerce-sql ← orders + inventory (shared)</text><text x="758" y="221" font-size="11" fill="#1c2733">payments-sql ← payments only (private)</text>
+    <rect x="745" y="242" width="235" height="46" rx="8" fill="#fff" stroke="#2c6aa3" stroke-width="2"/><text x="758" y="262" font-size="12" font-weight="700" fill="#2c6aa3">Trace · Monitoring</text><text x="758" y="278" font-size="11" fill="#1c2733">via OTel googlecloud exporter</text>
+    <rect x="745" y="294" width="235" height="46" rx="8" fill="#fff4ee" stroke="#e8622a" stroke-width="2"/><text x="758" y="314" font-size="12" font-weight="700" fill="#e8622a">GitLab.com</text><text x="758" y="330" font-size="11" fill="#1c2733">Flux source · CI + OIDC (via NAT)</text>
+    <rect x="745" y="346" width="235" height="72" rx="8" fill="#f6f8fb" stroke="#8aa0b5"/><text x="758" y="366" font-size="12" font-weight="700" fill="#1a4470">GCS state buckets</text><text x="758" y="384" font-size="11" fill="#1c2733">np / p tfstate · versioned</text><text x="758" y="400" font-size="11" fill="#1c2733">Prod project: state + SAs only</text>
     <g stroke="#5b6b7b" stroke-width="1.6" fill="none" marker-end="url(#a)">
       <path d="M706 140 L745 82"/><path d="M706 175 L745 155"/><path d="M706 215 L745 222"/><path d="M706 280 L745 290"/>
     </g>
   </svg></div>
+</section>
+
+<!-- 4b domain detail -->
+<section class="slide">
+  <h2>Each domain, up close — same pod shape, different stack and data</h2>
+  <div class="sub">One Tier-2 chart, three releases. What differs per domain: language, endpoints, which database, and which calls are allowed out.</div>
+  <div style="display:flex;gap:12px;flex:1">
+
+    <div class="card" style="flex:1;padding:6px"><svg viewBox="0 0 300 420" xmlns="http://www.w3.org/2000/svg">
+      <rect x="5" y="5" width="290" height="410" rx="10" fill="#fff4ee" stroke="#e8622a" stroke-width="2"/>
+      <text x="15" y="28" font-size="14" font-weight="700" fill="#e8622a">ns dom-orders · Go</text>
+      <text x="15" y="44" font-size="10" fill="#5b6b7b">public API · the saga driver</text>
+      <rect x="15" y="56" width="270" height="185" rx="6" fill="#fff" stroke="#8aa0b5" stroke-dasharray="4 3"/>
+      <text x="150" y="72" font-size="10" text-anchor="middle" fill="#5b6b7b">Pod (5 containers)</text>
+      <rect x="25" y="80" width="250" height="28" rx="4" fill="#e8622a"/><text x="150" y="98" font-size="11" text-anchor="middle" fill="#fff">app :8080 — POST /orders, GET /orders/:id</text>
+      <rect x="25" y="116" width="122" height="24" rx="4" fill="#1a4470"/><text x="86" y="132" font-size="10" text-anchor="middle" fill="#fff">istio-proxy</text>
+      <rect x="153" y="116" width="122" height="24" rx="4" fill="#2c6aa3"/><text x="214" y="132" font-size="10" text-anchor="middle" fill="#fff">otel-collector</text>
+      <rect x="25" y="146" width="122" height="24" rx="4" fill="#1f7a4d"/><text x="86" y="162" font-size="10" text-anchor="middle" fill="#fff">fluent-bit</text>
+      <rect x="153" y="146" width="122" height="24" rx="4" fill="#6b4fa0"/><text x="214" y="162" font-size="10" text-anchor="middle" fill="#fff">sql-proxy</text>
+      <text x="25" y="192" font-size="10" fill="#5b6b7b">KSA orders → GSA orders-app (WI)</text>
+      <text x="25" y="208" font-size="10" fill="#5b6b7b">envFrom: db-creds → DATABASE_URL</text>
+      <text x="25" y="224" font-size="10" fill="#5b6b7b">default-deny + egress :8080/:5432/:53</text>
+      <rect x="15" y="268" width="270" height="58" rx="6" fill="#f4effb" stroke="#6b4fa0" stroke-width="2"/>
+      <text x="150" y="290" font-size="12" font-weight="700" text-anchor="middle" fill="#6b4fa0">commerce-db :5432 (shared)</text>
+      <text x="150" y="308" font-size="10" text-anchor="middle" fill="#1c2733">decrement stock + order row — ONE tx</text>
+      <path d="M150 241 L150 268" stroke="#6b4fa0" stroke-width="2"/>
+      <text x="15" y="350" font-size="10" fill="#1c2733">→ inventory.dom-inventory <tspan font-weight="700">GET /items/:id</tspan> (mTLS)</text>
+      <text x="15" y="368" font-size="10" fill="#1c2733">→ payments.dom-payments <tspan font-weight="700">POST /charge</tspan> (mTLS)</text>
+      <text x="15" y="386" font-size="10" fill="#1c2733">→ declines: compensating tx restores stock</text>
+      <text x="15" y="404" font-size="10" fill="#b85450">✗ payments-db:5432 — DROPPED by NetPol</text>
+    </svg></div>
+
+    <div class="card" style="flex:1;padding:6px"><svg viewBox="0 0 300 420" xmlns="http://www.w3.org/2000/svg">
+      <rect x="5" y="5" width="290" height="410" rx="10" fill="#eef7f1" stroke="#1f7a4d" stroke-width="2"/>
+      <text x="15" y="28" font-size="14" font-weight="700" fill="#1f7a4d">ns dom-payments · Python</text>
+      <text x="15" y="44" font-size="10" fill="#5b6b7b">internal · FastAPI, own private DB</text>
+      <rect x="15" y="56" width="270" height="185" rx="6" fill="#fff" stroke="#8aa0b5" stroke-dasharray="4 3"/>
+      <text x="150" y="72" font-size="10" text-anchor="middle" fill="#5b6b7b">Pod (5 containers)</text>
+      <rect x="25" y="80" width="250" height="28" rx="4" fill="#1f7a4d"/><text x="150" y="98" font-size="11" text-anchor="middle" fill="#fff">app :8080 — POST /charge</text>
+      <rect x="25" y="116" width="122" height="24" rx="4" fill="#1a4470"/><text x="86" y="132" font-size="10" text-anchor="middle" fill="#fff">istio-proxy</text>
+      <rect x="153" y="116" width="122" height="24" rx="4" fill="#2c6aa3"/><text x="214" y="132" font-size="10" text-anchor="middle" fill="#fff">otel-collector</text>
+      <rect x="25" y="146" width="122" height="24" rx="4" fill="#1f7a4d"/><text x="86" y="162" font-size="10" text-anchor="middle" fill="#fff">fluent-bit</text>
+      <rect x="153" y="146" width="122" height="24" rx="4" fill="#6b4fa0"/><text x="214" y="162" font-size="10" text-anchor="middle" fill="#fff">sql-proxy</text>
+      <text x="25" y="192" font-size="10" fill="#5b6b7b">KSA payments → GSA payments-app (WI)</text>
+      <text x="25" y="208" font-size="10" fill="#5b6b7b">envFrom: db-creds → DATABASE_URL</text>
+      <text x="25" y="224" font-size="10" fill="#5b6b7b">default-deny + egress :5432/:53</text>
+      <rect x="15" y="268" width="270" height="58" rx="6" fill="#f4effb" stroke="#6b4fa0" stroke-width="2"/>
+      <text x="150" y="290" font-size="12" font-weight="700" text-anchor="middle" fill="#6b4fa0">payments-db :5432 (private)</text>
+      <text x="150" y="308" font-size="10" text-anchor="middle" fill="#1c2733">payments rows · 402 on simulate=fail/.99</text>
+      <path d="M150 241 L150 268" stroke="#6b4fa0" stroke-width="2"/>
+      <text x="15" y="350" font-size="10" fill="#1c2733">ingress: SPIFFE orders-sa only (mTLS)</text>
+      <text x="15" y="368" font-size="10" fill="#1c2733">denied-in: every other principal → 403 RBAC</text>
+      <text x="15" y="386" font-size="10" fill="#b85450">✗ → inventory — DROPPED (egress+ingress)</text>
+      <text x="15" y="404" font-size="10" fill="#b85450">✗ → commerce-db:5432 — DROPPED</text>
+    </svg></div>
+
+    <div class="card" style="flex:1;padding:6px"><svg viewBox="0 0 300 420" xmlns="http://www.w3.org/2000/svg">
+      <rect x="5" y="5" width="290" height="410" rx="10" fill="#eaf0f7" stroke="#1a4470" stroke-width="2"/>
+      <text x="15" y="28" font-size="14" font-weight="700" fill="#1a4470">ns dom-inventory · Node</text>
+      <text x="15" y="44" font-size="10" fill="#5b6b7b">internal · Express catalog on shared DB</text>
+      <rect x="15" y="56" width="270" height="185" rx="6" fill="#fff" stroke="#8aa0b5" stroke-dasharray="4 3"/>
+      <text x="150" y="72" font-size="10" text-anchor="middle" fill="#5b6b7b">Pod (5 containers)</text>
+      <rect x="25" y="80" width="250" height="28" rx="4" fill="#1a4470"/><text x="150" y="98" font-size="11" text-anchor="middle" fill="#fff">app :8080 — GET /items, /items/:id</text>
+      <rect x="25" y="116" width="122" height="24" rx="4" fill="#1a4470"/><text x="86" y="132" font-size="10" text-anchor="middle" fill="#fff">istio-proxy</text>
+      <rect x="153" y="116" width="122" height="24" rx="4" fill="#2c6aa3"/><text x="214" y="132" font-size="10" text-anchor="middle" fill="#fff">otel-collector</text>
+      <rect x="25" y="146" width="122" height="24" rx="4" fill="#1f7a4d"/><text x="86" y="162" font-size="10" text-anchor="middle" fill="#fff">fluent-bit</text>
+      <rect x="153" y="146" width="122" height="24" rx="4" fill="#6b4fa0"/><text x="214" y="162" font-size="10" text-anchor="middle" fill="#fff">sql-proxy</text>
+      <text x="25" y="192" font-size="10" fill="#5b6b7b">KSA inventory → GSA inventory-app (WI)</text>
+      <text x="25" y="208" font-size="10" fill="#5b6b7b">envFrom: db-creds → DATABASE_URL</text>
+      <text x="25" y="224" font-size="10" fill="#5b6b7b">default-deny + egress :5432/:53</text>
+      <rect x="15" y="268" width="270" height="58" rx="6" fill="#f4effb" stroke="#6b4fa0" stroke-width="2"/>
+      <text x="150" y="290" font-size="12" font-weight="700" text-anchor="middle" fill="#6b4fa0">commerce-db :5432 (shared)</text>
+      <text x="150" y="308" font-size="10" text-anchor="middle" fill="#1c2733">owns inventory schema · reads catalog</text>
+      <path d="M150 241 L150 268" stroke="#6b4fa0" stroke-width="2"/>
+      <text x="15" y="350" font-size="10" fill="#1c2733">ingress: SPIFFE orders-sa only (mTLS)</text>
+      <text x="15" y="368" font-size="10" fill="#1c2733">shares DB w/ orders — same failure domain</text>
+      <text x="15" y="386" font-size="10" fill="#b85450">✗ → payments — DROPPED (egress+ingress)</text>
+      <text x="15" y="404" font-size="10" fill="#b85450">✗ → payments-db:5432 — DROPPED</text>
+    </svg></div>
+  </div>
+  <div class="note" style="margin-top:.6em">Local lab: the two purple boxes are Postgres StatefulSets in <code>dom-data</code> (no sidecar — L4 NetPol only). GCP: <code>commerce-sql</code> + <code>payments-sql</code> Cloud SQL via PSA, and <code>sql-proxy</code> is the 5th sidecar that puts WI identity <em>inside</em> the DB handshake.</div>
 </section>
 
 <!-- 5 gitlab -->
@@ -157,6 +239,43 @@ svg text{font-family:Inter,system-ui,sans-serif}
     <div class="card o"><span class="pill" style="background:var(--orange)">Tier 3 · Applications</span><h3>applications/&lt;domain&gt;</h3><ul class="mono"><li>orders/ → orders-svc, orders-infra</li><li>payments/ → payments-svc, payments-infra</li><li>inventory/ → inventory-svc, inventory-infra</li></ul><div class="note"><code>AR_REPO</code> variables exist <b>only</b> here. Analogy: individual storefronts</div></div>
   </div>
   <div class="card r" style="margin-top:.7em"><b>Hands-on proof:</b> create a repo outside <code>applications/</code> → image push fails (variable not inherited). Create a project outside the root group → WIF attribute condition rejects the token.</div>
+</section>
+
+<!-- 5b step 0 -->
+<section class="slide">
+  <h2>Step 0 — the starting point: repos &amp; folders</h2>
+  <div class="sub">Two homes: the labs' repo + your scratch dir locally, one GitLab project per box on GCP. Names are deterministic — nothing is ever looked up.</div>
+  <div style="display:flex;gap:12px;flex:1">
+    <div class="card" style="flex:1.2"><span class="pill" style="background:var(--navy)">GitLab projects (create once)</span>
+      <pre class="mono" style="font-size:.8em;line-height:1.45;margin:.4em 0">gitlab.com/acme-labs-&lt;handle&gt;/
+├─ platform/            ← Tier 1: infra lives here
+│   bootstrap · network · gke-platform
+│   observability · terraform-modules ★ · ci-templates ★
+├─ domain-shared/       ← Tier 2: shared utilities
+│   shared-services        (Cloud SQL: commerce-sql, payments-sql)
+│   configurations/helm-charts   (acme-microservice, OCI-published)
+│   configurations/flux-releases (GitOps repo Flux watches)
+└─ applications/        ← Tier 3: storefronts
+    orders/    orders-svc + orders-infra
+    payments/  payments-svc + payments-infra
+    inventory/ inventory-svc + inventory-infra</pre>
+      <div class="note">★ shared code — consumed by git tag (<code>?ref=v…</code>), never copied downstream</div></div>
+    <div class="card" style="flex:1"><span class="pill" style="background:var(--green)">Local folders (labs)</span>
+      <pre class="mono" style="font-size:.8em;line-height:1.45;margin:.4em 0">KubernetesConcepts/     ← this repo
+├─ apps/orders · payments · inventory
+├─ apps/data/      (dom-data: DBs + seed)
+├─ charts/acme-microservice/
+└─ src/1 … src/12  (concept manifests)
+
+~/acme-k8s-lab/         ← scratch (never committed)
+├─ charts/   (the chart you author, Lab 03)
+├─ gitops/   clusters/local + infrastructure/
+│            {controllers,configs,data} + apps/local
+└─ scripts/  cluster-up · down · verify-all</pre>
+      <div class="note">Lab 10 proves it: delete everything under <code>~/acme-k8s-lab</code>, rebuild green from the repo + scripts</div></div>
+  </div>
+  <div class="card" style="margin-top:.6em"><span class="pill" style="background:var(--orange)">Two environments, one shape</span>
+    <div class="mono" style="font-size:.8em;line-height:1.45"><b>np</b> = my-devops-journey-502420 → cluster <code>acme-np</code>, SA <code>pipeline-np</code>, Flux <code>clusters/np</code> — <b>the labs build this</b><br><b>prod</b> = acme-labs-p-&lt;suffix&gt; → state buckets + SAs only (<code>pipeline-p</code> protected-main / <code>pipeline-p-ro</code>), Flux <code>clusters/p</code> — deploys gated by WIF CEL on the protected branch</div></div>
 </section>
 
 <!-- 6 identity -->

@@ -1,0 +1,190 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.domain }}
+  namespace: dom-{{ .Values.domain }}
+  {{- if .Values.serviceAccount.gsaEmail }}
+  annotations:
+    iam.gke.io/gcp-service-account: {{ .Values.serviceAccount.gsaEmail | quote }}
+  {{- end }}
+---
+{{- if .Values.sidecars.fluentbit.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.domain }}-fluentbit
+  namespace: dom-{{ .Values.domain }}
+data:
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush        1
+        Parsers_File parsers.conf
+    [INPUT]
+        Name         tail
+        Path         /var/log/app/*.log
+        Tag          app.{{ .Values.domain }}
+    [FILTER]
+        Name         record_modifier
+        Match        *
+        Record       domain {{ .Values.domain }}
+    [OUTPUT]
+        Name         forward
+        Match        *
+        Host         log-aggregator.observability.svc.cluster.local
+        Port         24224
+---
+{{- end }}
+{{- if .Values.sidecars.otel.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.domain }}-otel
+  namespace: dom-{{ .Values.domain }}
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: 127.0.0.1:4318
+    exporters:
+      debug:
+        verbosity: basic
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          exporters: [debug]
+---
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.domain }}
+  namespace: dom-{{ .Values.domain }}
+  labels:
+    app: {{ .Values.domain }}
+    domain: {{ .Values.domain }}
+spec:
+  selector:
+    app: {{ .Values.domain }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.domain }}
+  namespace: dom-{{ .Values.domain }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.domain }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.domain }}
+        domain: {{ .Values.domain }}
+    spec:
+      serviceAccountName: {{ .Values.domain }}
+      volumes:
+        - name: applogs
+          emptyDir: {}
+        {{- if .Values.sidecars.fluentbit.enabled }}
+        - name: fb-cfg
+          configMap:
+            name: {{ .Values.domain }}-fluentbit
+        {{- end }}
+        {{- if .Values.sidecars.otel.enabled }}
+        - name: otel-cfg
+          configMap:
+            name: {{ .Values.domain }}-otel
+        {{- end }}
+      containers:
+        - name: app
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.service.targetPort }}
+          {{- if .Values.env }}
+          env:
+            {{- range $k, $v := .Values.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- end }}
+          {{- if .Values.envFromSecrets }}
+          envFrom:
+            {{- range .Values.envFromSecrets }}
+            - secretRef:
+                name: {{ . }}
+            {{- end }}
+          {{- end }}
+          {{- if .Values.probes.readiness.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: {{ .Values.service.targetPort }}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          {{- end }}
+          {{- if or .Values.sidecars.fluentbit.enabled .Values.sidecars.otel.enabled }}
+          # Telemetry generator: heartbeat JSON line -> /var/log/app/app.log (Pattern B file-tail)
+          # and a synthetic OTLP span -> 127.0.0.1:4318 (Pattern C) every 5s.
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    touch /var/log/app/app.log
+                    (while true; do
+                      echo "{\"severity\":\"INFO\",\"domain\":\"{{ .Values.domain }}\",\"message\":\"heartbeat\"}" >> /var/log/app/app.log
+                      wget -qO /dev/null --header="Content-Type: application/json" \
+                        --post-data='{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"{{ .Values.domain }}"}}]},"scopeSpans":[{"spans":[{"traceId":"5B8EFFF798038103D269B633813FC60C","spanId":"EEE19B7EC3C1B174","name":"heartbeat","startTimeUnixNano":"1700000000000000000","endTimeUnixNano":"1700000001000000000","kind":1}]}]}]}' \
+                        http://127.0.0.1:4318/v1/traces 2>/dev/null || true
+                      sleep 5
+                    done) &
+          {{- end }}
+          volumeMounts:
+            - name: applogs
+              mountPath: /var/log/app
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+        {{- if .Values.sidecars.fluentbit.enabled }}
+        - name: fluent-bit
+          image: {{ .Values.sidecars.fluentbit.image }}
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: applogs
+              mountPath: /var/log/app
+              readOnly: true
+            - name: fb-cfg
+              mountPath: /fluent-bit/etc/fluent-bit.conf
+              subPath: fluent-bit.conf
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+        {{- end }}
+        {{- if .Values.sidecars.otel.enabled }}
+        - name: otel-collector
+          image: {{ .Values.sidecars.otel.image }}
+          imagePullPolicy: IfNotPresent
+          args: ["--config=/conf/config.yaml"]
+          volumeMounts:
+            - name: otel-cfg
+              mountPath: /conf
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+        {{- end }}

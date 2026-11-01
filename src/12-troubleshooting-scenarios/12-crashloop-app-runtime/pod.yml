@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app-crash-pod
+  labels:
+    app: app-crash-demo
+spec:
+  containers:
+    - name: app
+      image: busybox
+      # Simulates an app (e.g. Spring Boot) that dies on a failed DB connection
+      command:
+        - sh
+        - -c
+        - |
+          echo "Starting application..."
+          echo "Connecting to jdbc:mysql://mysql-svc:3306/appdb ..."
+          sleep 5
+          echo "ERROR: Communications link failure - Connection refused"
+          exit 1

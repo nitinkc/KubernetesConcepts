@@ -1,0 +1,10 @@
+# dom-data — the data tier. Both Postgres DBs live here, OUTSIDE any domain's
+# trust boundary. Domain pods must egress to dom-data:5432, which is what makes
+# the Lab 05/06 policy work real.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dom-data
+  labels:
+    kubernetes.io/metadata.name: dom-data
+    tier: data

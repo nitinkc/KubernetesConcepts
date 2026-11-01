@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: big-memory-pod
+  labels:
+    app: big-memory
+spec:
+  containers:
+    - name: nginx
+      image: nginx
+      resources:
+        requests:
+          memory: "4Gi" # more than any node has (minikube ~1.9Gi)
+          cpu: "500m"
+        limits:
+          memory: "4Gi"

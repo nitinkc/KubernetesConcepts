@@ -8,7 +8,7 @@
 ## 1. Quick answer: can Kubernetes create a VPC or handle subnet-to-subnet traffic?
 
 | Question | Answer |
-|---|---|
+| --- | --- |
 | Can Kubernetes create a VPC / subnet / route / NAT / firewall? | **No.** Those belong to the layer *below* it (GCP VPC via Terraform; here: Docker networks + a router container). |
 | Can something running *in* Kubernetes create them? | Only by calling the cloud API (Config Connector, Crossplane, Flux tf-controller). The cloud still creates the object. Not the goal here: you want to hand-write the network. |
 | Does Kubernetes know about subnets? | No. It knows **nodes**, a **pod CIDR**, a **service CIDR**. Which subnet a node is in is invisible to it. |
@@ -36,8 +36,9 @@ So **on minikube you simulate the layer below Kubernetes yourself** (Docker netw
 ## 3. Minikube specifics (read before S1)
 
 ### 3a. Flags and what I verified (against minikube docs, Oct 2026)
+
 | Need | Minikube option | Status |
-|---|---|---|
+| --- | --- | --- |
 | Choose node subnet | `--subnet=10.10.0.0/24` (docker/podman driver; default starts at 192.168.49.0) | ✔ documented |
 | Use an existing Docker network | `--network=<name>` | ✔ documented |
 | Fixed node IP | `--static-ip=10.10.0.10` (private IPv4, last octet 2–254; **cannot add to an existing cluster**) | ✔ documented |
@@ -55,8 +56,9 @@ So **on minikube you simulate the layer below Kubernetes yourself** (Docker netw
 > Run `minikube start --help` once and confirm every flag above on **your** version before building on it.
 
 ### 3b. Translation from the kind lab file
+
 | In `acme-labs-k8s-on-docker-practice.md` | On minikube |
-|---|---|
+| --- | --- |
 | `kind create cluster --config …` | `minikube start -p acme --driver=docker --container-runtime=containerd --nodes=2 --subnet=10.10.0.0/24 --service-cluster-ip-range=10.30.0.0/24 --extra-config=kubeadm.pod-network-cidr=10.20.0.0/20 --cni=cilium` (verify as above) |
 | Nodes `acme-control-plane`, `acme-worker`, `acme-worker2` | `acme`, `acme-m02`, `acme-m03` (confirm: `minikube node list -p acme`); they are containers → `docker exec <node> …` or `minikube ssh -p acme -n <node>` |
 | `docker network create acme-main` | minikube creates the network itself (named after the profile — confirm with `docker network ls`) **or** pre-create and pass `--network=` |
@@ -66,6 +68,7 @@ So **on minikube you simulate the layer below Kubernetes yourself** (Docker netw
 | `kind delete cluster` | `minikube delete -p acme` |
 
 ### 3c. OS caveats (tell me yours — §12)
+
 - **Linux:** node IPs reachable from the host; ingress addon works.
 - **macOS / Windows (Docker Desktop):** run network tests from **containers** (`probe`) or `kubectl exec`; use `minikube tunnel` for LoadBalancer; ingress addon not supported on docker driver.
 - All: node-container routes are **lost on restart** → keep `scripts/routes.sh`.
@@ -76,14 +79,15 @@ So **on minikube you simulate the layer below Kubernetes yourself** (Docker netw
 
 Final local topology (mirrors the GCP plan §2):
 
-```
+```text
  acme-ops 10.10.1.0/28                         acme (minikube) 10.10.0.0/24
  [probe 10.10.1.3] ─ 10.10.1.2 [vpc-router] 10.10.0.250 ─ [acme][acme-m02][acme-m03]
                                   (routes + firewall)        pods 10.20.0.0/20 · svcs 10.30.0.0/24
  inside the cluster:  dom-orders | dom-payments | dom-inventory | observability | istio-system | flux-system
 ```
+
 | After stage | Topology gains |
-|---|---|
+| --- | --- |
 | S1 | 1–2 nodes, explicit node/pod/service ranges |
 | S2 | ops subnet, router, probe, firewall |
 | S3 | Cilium + Hubble visibility |
@@ -102,7 +106,8 @@ Final local topology (mirrors the GCP plan §2):
 ## 5. The learning system (what makes it incremental)
 
 ### 5a. Lab repo layout
-```
+
+```text
 acme-k8s-lab/
   README.md                    # the stage checklist (tick as gates pass)
   notebook/
@@ -121,12 +126,14 @@ acme-k8s-lab/
 ```
 
 ### 5b. Templates (copy into notebook/)
+
 - **IPAM row:** `name | CIDR | owner (who allocates) | routable beyond cluster? | overlap risk | GCP twin`
 - **Packet path:** `flow | hop 1 … hop n | NAT/SNAT where? | policy/firewall that decides | proof command + output`
 - **Failure signature:** `symptom (exact text) | layer | first command to confirm | root cause | fix | stage first seen`
 - **Prediction:** `question | my prediction | actual | why I was right/wrong`
 
 ### 5c. Loop for every lab (≈ the unit of progress)
+
 1. **Learn first** (20–30 min): the stage's mechanics list.
 2. **Predict:** write 3–5 expectations in `predictions.md`.
 3. **Do:** build the stage increment; script it (`stages/sNN/…`).
@@ -136,6 +143,7 @@ acme-k8s-lab/
 7. **Gate:** tick the checklist; `verify-sNN.sh` and `verify-all.sh` green.
 
 ### 5d. Review cadence
+
 - **End of each Part (A–E):** redraw the whole topology from a blank page; re-derive the IPAM table; re-run `verify-all.sh` on a fresh cluster.
 - **Failure-catalog drill:** pick 5 random symptoms, name the layer without running anything.
 - **Teach-back:** 10-minute spoken walkthrough of one packet path per Part.
@@ -145,7 +153,7 @@ acme-k8s-lab/
 ## 6. Stage overview
 
 | # | Stage | Layer | New concept | New failure family | Kind lab | GCP twin | Effort* |
-|---|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | S0 | Workbench + defaults | — | what minikube gives you by default | restart behaviour | — | P0 | S |
 | S1 | Address plan + cluster | L0 address space | node/pod/service CIDRs, IPAM | silent overlaps, wrong IPAM owner | K1, K2 | P3, P4 | M |
 | S2 | Below Kubernetes: subnet, router, firewall | L2/L3 | next hop, ARP, conntrack | asymmetric routing, stateful firewall drops | K3 | P3 | M–L |
@@ -171,6 +179,7 @@ acme-k8s-lab/
 > Format per stage: **Goal · Learn first · Build · Break · Capture · Gate · GCP link.** Keep what you like; cut or reorder in §12.
 
 ### S0 — Workbench + defaults (Part A)
+
 - **Goal:** repo, notebooks and scripts exist; you have seen what minikube does *by default* before designing anything.
 - **Learn first:** minikube on docker driver = node is a container; profiles; addons; where state lives; how `stop/start` differs from `delete`.
 - **Build:** tool/version check (`docker info` memory, `minikube version`, `helm`, `flux`, `istioctl`, `kubectl`); repo skeleton + templates; a throwaway profile `scratch` started with defaults.
@@ -181,6 +190,7 @@ acme-k8s-lab/
 - **GCP link:** P0 hygiene (budget alarm has no local twin — make one for your *laptop RAM* instead: `docker stats` baseline).
 
 ### S1 — Address plan + cluster (IPAM)
+
 - **Goal:** design the address space on paper first; create the cluster to match; prove it.
 - **Learn first:** CIDR arithmetic; three separate address spaces (node, pod, service); per-node pod slice (e.g. /24 per node out of a /20 → 16 nodes max); who allocates pod IPs (kube-controller-manager `node.spec.podCIDR` vs the CNI's own pool); what is routable outside the cluster (pods/services: **no**); RFC1918 vs 100.64/10; why GKE needs secondary ranges and a /28 master range.
 - **Build:** 10 CIDR drills (capacity, overlap, split); IPAM v1 using the same numbers as GCP plan §2; start `acme` with explicit ranges (§3b); verify with `kubectl`/`docker network inspect`.
@@ -191,6 +201,7 @@ acme-k8s-lab/
 - **GCP link:** P3 subnets + secondary ranges, P4 `ip_allocation_policy`, `max_pods_per_node`.
 
 ### S2 — Below Kubernetes: second subnet, router, firewall
+
 - **Goal:** reproduce "routes + next hop + firewall" which Kubernetes cannot see.
 - **Learn first:** L2 vs L3; ARP; longest-prefix match; next hop; `ip_forward`; stateful firewall (conntrack, ESTABLISHED/RELATED); asymmetric routing; Docker bridge ≈ subnet, why two bridges don't talk by default.
 - **Build:** `acme-ops` network, `vpc-router` (dual-homed, NET_ADMIN), `probe`; routes both ways; `FORWARD DROP` + explicit allows; reach the API server only from `probe` (analog of authorized networks); `routes.sh`.
@@ -200,6 +211,7 @@ acme-k8s-lab/
 - **GCP link:** P3 routes/firewall, IAP bastion, stretch S2 (hybrid).
 
 ### S3 — Pod network (CNI)
+
 - **Goal:** know what actually happens when pod A talks to pod B.
 - **Learn first:** pod netns + veth pair; CNI = IPAM + wiring; overlay (VXLAN/Geneve) vs native routing; where pod IPs get SNAT'd; kube-proxy vs eBPF datapath; identities; Hubble.
 - **Build:** confirm Cilium healthy (`cilium status`); same-node and cross-node pod pings; `tcpdump` on a node's `eth0` to see encapsulation; inspect `ip route`, `ip link`, Cilium endpoint list; enable Hubble and watch flows.
@@ -209,6 +221,7 @@ acme-k8s-lab/
 - **GCP link:** P4 Dataplane V2 (Cilium) — same policy engine, different packet transport.
 
 ### S4 — Services, kube-proxy and DNS
+
 - **Goal:** demystify "ClusterIP" and name resolution.
 - **Learn first:** ClusterIP is virtual (DNAT, no interface); EndpointSlices; `port` vs `targetPort`; kube-proxy modes; NodePort; headless; CoreDNS, search domains, `ndots:5`, FQDN trailing dot; `externalTrafficPolicy`.
 - **Build:** echo deployment + Service; read the DNAT rules on a node (`iptables-save | grep`); resolve from a pod with `dig` and watch query counts with different `ndots`; reach a NodePort from `probe` via the router.
@@ -218,6 +231,7 @@ acme-k8s-lab/
 - **GCP link:** all P7 service calls; GKE kube-dns / NodeLocal DNS.
 
 ### S5 — Three services + Helm chart
+
 - **Goal:** realistic workloads to carry every later network experiment.
 - **Learn first:** probes (liveness/readiness/startup), requests/limits vs allocatable (scheduling math), ServiceAccounts, env config, structured JSON logs (`severity`, `message`, `domain`), timeouts/retries between services, Helm templating (values, helpers, `lint`, `template`).
 - **Build:** `orders` (Go), `payments` (Python), `inventory` (Node) with `/healthz` + `/work`; call graph orders→payments, orders→inventory; Dockerfiles; `minikube image load`; chart `acme-microservice` v1 (no sidecars yet); three releases in namespaces `dom-*`; `verify-s05.sh`.
@@ -227,6 +241,7 @@ acme-k8s-lab/
 - **GCP link:** P7a–c (sample code is in the GCP plan).
 
 ### S6 — Egress and the doors
+
 - **Goal:** the P8 lesson in miniature — delete the default route, then earn every outbound flow back.
 - **Learn first:** default route and longest prefix; SNAT/masquerade (who rewrites, where); DNS is resolved *out of band* from routing (name works, TCP dead); node-level egress (pods inherit it); why node labels are the local stand-in for tags; image-pull as an egress dependency.
 - **Build:** add 3rd node; preload images; baseline source-IP observation (internal echo container logs client IP); remove default route on nodes; Door 2 (/32), Door 3 (default route only on the labelled node), Door 4 (route via router); fill the **door table from evidence**.
@@ -236,6 +251,7 @@ acme-k8s-lab/
 - **GCP link:** P3 doors + P8. *Door 1 (Private Google Access + private DNS VIP) has no local equivalent — it is the first genuinely new GCP item.*
 
 ### S7 — NetworkPolicy
+
 - **Goal:** enforce the call graph at L3/L4 and learn to read the verdicts.
 - **Learn first:** additive allow model; default-deny; pod selectors vs namespace selectors; **ports are pod ports, not Service ports**; egress needs DNS; `ipBlock` semantics; how Cilium maps policy to identities; Hubble verdicts.
 - **Build:** default-deny + DNS in each `dom-*`; allow orders→payments/inventory on pod port; verification matrix; watch `DROPPED` flows.
@@ -245,6 +261,7 @@ acme-k8s-lab/
 - **GCP link:** P7e; later NetworkPolicy must also allow the GKE metadata server (WI) — new on GCP.
 
 ### S8 — Mesh identity (Istio sidecars)
+
 - **Goal:** identity-based control on top of network-based control.
 - **Learn first:** injection mechanics (label → webhook → pod creation time; existing pods need restart); init container iptables redirect; Envoy bootstrap via xDS (istiod:15012); mTLS modes (PERMISSIVE/STRICT); SPIFFE identity = namespace + ServiceAccount; AuthorizationPolicy (any ALLOW policy ⇒ implicit deny for the workload); probe rewrite; interplay with NetworkPolicy.
 - **Build:** install Istio (sidecar mode, minimal profile); label + restart; fix the egress-to-istiod break; STRICT in payments; plain-client test; "intruder" ServiceAccount in the same namespace; AuthorizationPolicy.
@@ -254,6 +271,7 @@ acme-k8s-lab/
 - **GCP link:** P5 (webhook firewall rule from the master), P7.
 
 ### S9 — Sidecars and central logging
+
 - **Goal:** four-container pod; all logs reach one central place.
 - **Learn first:** sidecar pattern and its resource tax; shared `emptyDir`; three log paths (stdout via node agent, file-tail sidecar, OTLP sidecar); field conventions (`severity`, `message`, labels); central-sink concepts (what Cloud Logging's router/sink/bucket will do on GCP); `subPath` mounts.
 - **Build:** log aggregator (Fluent Bit forward → stdout); pod with app + Fluent Bit + OTel collector (+ injected Envoy); chart toggles `sidecars.*`; NetworkPolicy holes for the aggregator; capacity re-check from S5.
@@ -263,6 +281,7 @@ acme-k8s-lab/
 - **GCP link:** P6 (Log Router sink, `central-app-logs` bucket, Workload Identity for sidecars).
 
 ### S10 — Entry: LoadBalancer / Ingress / Gateway
+
 - **Goal:** traffic from outside the cluster, through every layer you built.
 - **Learn first:** NodePort → LoadBalancer → Ingress → Gateway API layering; L4 vs L7 LB; client-IP preservation (`externalTrafficPolicy`); MetalLB L2 (ARP) mechanics; health checks; plaintext at the edge vs STRICT mTLS; on minikube: `tunnel`/`service --url` where the host can't reach node IPs; ingress addon is Linux-only on docker driver.
 - **Build:** MetalLB pool inside the cluster subnet; LB service for `payments`; call it from `probe` via the router; then optional Gateway API (implementation decision in §12).
@@ -272,6 +291,7 @@ acme-k8s-lab/
 - **GCP link:** P9 (proxy-only subnet, health-check ranges, internal ALB). Mechanics differ (managed Envoy outside your VPC); layers are the same.
 
 ### S11 — GitOps ordering (Flux)
+
 - **Goal:** Git owns the cluster; ordering is explicit and provable.
 - **Learn first:** Flux controllers; GitRepository / Kustomization / HelmRelease; `dependsOn` + `wait` + health checks; prune and drift; CRD-before-CR; namespace-label-before-pod; bootstrap chicken-and-egg (CNI must exist before Flux).
 - **Build:** bootstrap against GitLab using the plan's group path; repo layout `controllers → configs → apps`; migrate S5–S10 manifests; delete manually-applied objects and let Flux recreate; image-tag bump flow (CI commit → reconcile).
@@ -281,6 +301,7 @@ acme-k8s-lab/
 - **GCP link:** P5 verbatim; the only change is Terraform creating the cluster underneath.
 
 ### S12 — Integration rehearsal + GCP handoff
+
 - **Goal:** prove repeatability and know exactly what is *new* on GCP.
 - **Do:** `minikube delete` → one script rebuilds cluster + routes + Cilium + Flux; `verify-all.sh` green; time it; write the runbook; produce the **GCP delta table** (§9) with a prediction for each row; 10-minute teach-back per Part.
 - **Gate:** cold rebuild with no hand edits; delta table complete; you can name the first GCP phase to start and its expected failure points.
@@ -288,19 +309,22 @@ acme-k8s-lab/
 ---
 
 ## 8. Cluster and resource strategy
+
 | Stage | Nodes | Per-node (indicative) | Notes |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | S0–S1 | 1 (2 for the overlap break) | 2 CPU / 3 GB | defaults first |
 | S2–S5 | 2 | 2 CPU / 3 GB | router/probe are tiny containers |
 | S6–S7 | 3 | 2 CPU / 3 GB | 3rd node = "tagged" door |
 | S8–S11 | 3 | 2 CPU / 4 GB | Istio + sidecars + Flux |
+
 Host RAM: ≥ 12 GB workable, 16 GB comfortable. Verify with `docker stats` and the S5 capacity table. One profile (`acme`) is rebuilt between Parts; use extra profiles only for deliberate overlap/multi-cluster experiments. Use `minikube stop` between sessions; remember routes reset (S2).
 
 ---
 
 ## 9. Handoff to GCP — what carries over and what is new
+
 | Topic | Local (minikube) | GCP | New learning there |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Address plan | Docker subnet + flags | VPC subnet + secondary ranges + master /28 + proxy-only | Terraform for ranges; PSA (100.64/10) |
 | Pod transport | CNI tunnels (overlay) | VPC-native alias IPs (native routing) | routes/firewall see pod CIDRs directly |
 | Egress | `ip route` on nodes | Cloud NAT + routes + tags | tag-based routes; static NAT IPs |
@@ -317,8 +341,9 @@ The Terraform / GitLab / WIF track (GCP P0–P2) is independent of this plan and
 ---
 
 ## 10. "Details that bite" — tracker (tick when *observed*, with evidence link)
+
 | Detail | Stage | Proof command idea |
-|---|---|---|
+| --- | --- | --- |
 | Pod CIDR slice per node limits node count | S1 | `kubectl get nodes -o custom-columns=…podCIDR` |
 | Overlap is silent until you connect networks | S1→S2 | second profile + router |
 | Routes on node containers vanish on restart | S0/S2 | `ip route` before/after |
@@ -344,8 +369,9 @@ The Terraform / GitLab / WIF track (GCP P0–P2) is independent of this plan and
 ---
 
 ## 11. Risks and mitigations
+
 | Risk | Mitigation |
-|---|---|
+| --- | --- |
 | Laptop RAM exhausted at S8+ | per-stage resource table; stop idle stacks; 2-node fallback for S8–S9 |
 | Built-in Cilium ignores your pod CIDR | S1 open item; decide Helm-installed Cilium |
 | Docker Desktop networking quirks | run all tests from containers; `routes.sh` |
@@ -355,8 +381,9 @@ The Terraform / GitLab / WIF track (GCP P0–P2) is independent of this plan and
 ---
 
 ## 12. Fine-tuning panel (your decisions)
+
 | Decision | Default in this plan | Alternatives | Effect |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | CNI | Cilium (matches GKE Dataplane V2) | Calico (documented in minikube), kindnet (no policy) | S3/S7 depth, Hubble |
 | Mesh | Istio sidecar | Linkerd, Istio ambient (removes sidecars you want to study), skip mesh | S8–S10 |
 | Runtime | containerd | docker | parity with GKE |
@@ -369,6 +396,7 @@ The Terraform / GitLab / WIF track (GCP P0–P2) is independent of this plan and
 | Depth control | breadth first; deep-dive per stage on request | add a "deep" column | time |
 
 **Questions for you (answer any, ignore the rest):**
+
 1. Which OS / how much RAM? (decides tunnel vs direct IP, node count)
 2. Keep Istio, or prefer to start without a mesh and add it as an optional S8?
 3. Flux against gitlab.com (needs internet/token) or fully local?
@@ -378,6 +406,7 @@ The Terraform / GitLab / WIF track (GCP P0–P2) is independent of this plan and
 ---
 
 ## 13. Sources (minikube docs used to verify §3)
+
 - [minikube start flags](https://minikube.sigs.k8s.io/docs/commands/start/)
 - [Static IP tutorial](https://minikube.sigs.k8s.io/docs/tutorials/static_ip/)
 - [Network policy / CNI handbook](https://minikube.sigs.k8s.io/docs/handbook/network_policy/)

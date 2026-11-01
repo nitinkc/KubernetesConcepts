@@ -8,7 +8,7 @@
 ## Quick Navigation
 
 | Section | Focus | Direct Link |
-|---|---|---|
+| --- | --- | --- |
 | **Reference & Cheat Sheets** | Architectural Decisions (ADRs), Handy Commands, Failure Triage, GCP Rosetta Stone | [00 - Architecture & ADRs](reference/00-architecture-decisions.md) · [01 - Command Cheat Sheet](reference/01-command-cheatsheet.md) · [02 - Failure Triage Matrix](reference/02-failure-triage-matrix.md) · [03 - Local-to-GCP Rosetta Stone](reference/03-gcp-rosetta-stone.md) |
 | **Part A: Underlay & Cluster** | Docker VPC/Subnets, Router, Stateful Firewalls, Minikube IPAM, Cilium eBPF | [Lab 01: Docker Underlay & Firewalls](labs/lab-01-docker-underlay-routing.md) · [Lab 02: Minikube IPAM & Cilium CNI](labs/lab-02-minikube-ipam-cilium.md) |
 | **Part B: Workloads & Egress** | Services, DNAT, CoreDNS, Multi-Container Docker/Helm, Egress & The 4 Doors | [Lab 03: Services, DNS & App Packaging](labs/lab-03-services-dns-packaging.md) · [Lab 04: Egress & The 4 Outbound Doors](labs/lab-04-egress-four-doors.md) |

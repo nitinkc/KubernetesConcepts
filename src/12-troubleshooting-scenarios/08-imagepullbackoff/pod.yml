@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bad-image-pod
+  labels:
+    app: image-demo
+spec:
+  containers:
+    - name: nginx
+      image: nginx:latstt # typo: tag does not exist on Docker Hub

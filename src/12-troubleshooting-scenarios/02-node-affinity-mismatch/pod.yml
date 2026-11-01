@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: affinity-pod
+  labels:
+    app: affinity-demo
+spec:
+  nodeSelector:
+    my-node: demo-node # no node in the cluster carries this label
+  containers:
+    - name: nginx
+      image: nginx

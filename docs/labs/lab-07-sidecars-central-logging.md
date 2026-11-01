@@ -10,7 +10,7 @@
 ![4-container pod — three telemetry paths](../diagrams/lab07-pod-telemetry.drawio.svg)
 
 | Nuance | What Happens If You Get It Wrong |
-|---|---|
+| --- | --- |
 | **`subPath: fluent-bit.conf` on ConfigMap Volume Mounts** | Inside `fluent/fluent-bit:3.2`, `/fluent-bit/etc/` already contains `parsers.conf`. If you mount a ConfigMap onto `/fluent-bit/etc` **without `subPath`**, Kubernetes hides the entire directory, deleting `parsers.conf` and crashing the pod! |
 | **Sidecar Resource Multiplication Tax** | Adding 3 sidecars per pod (`istio-proxy` 50m/96Mi + `otel-collector` 50m/64Mi + `fluent-bit` 25m/32Mi) adds **125m CPU and 192Mi RAM to every single replica**. Always calculate node allocatable capacity before enabling sidecars cluster-wide. |
 | **Sidecars Share the Pod's Network Namespace & `NetworkPolicy`** | Loopback calls (`app -> 127.0.0.1:4318` `otel-collector`) never leave the pod and need no `NetworkPolicy`. Calling `log-aggregator.observability:24224` leaves the pod and **is blocked by `default-deny` egress** until explicitly allowed! |
@@ -208,7 +208,31 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - containerPort: {{ .Values.service.targetPort }}
-          # Tee nginx access logs to BOTH stdout (Pattern A) and /var/log/app/access.log (Pattern B)
+          {{- if .Values.env }}
+          env:
+            {{- range $k, $v := .Values.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- end }}
+          {{- if .Values.envFromSecrets }}
+          envFrom:
+            {{- range .Values.envFromSecrets }}
+            - secretRef:
+                name: {{ . }}
+            {{- end }}
+          {{- end }}
+          {{- if .Values.probes.readiness.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: {{ .Values.service.targetPort }}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          {{- end }}
+          # Telemetry generator: heartbeat JSON line -> /var/log/app/app.log (Pattern B file-tail)
+          # and a synthetic OTLP span -> 127.0.0.1:4318 (Pattern C) every 5s.
+          # (Real saga events — "order confirmed", "payment declined" — also stream via stdout, Pattern A.)
           lifecycle:
             postStart:
               exec:
@@ -330,14 +354,19 @@ done
 
 ---
 
-### Step 5: Verify All 3 Telemetry Streams Live
+### Step 5: Verify All 3 Telemetry Streams Live — on Real Saga Events
 
 ```bash
-# 1. Generate a live East-West call (orders -> payments)
-kubectl -n dom-orders exec deploy/orders -c app -- wget -qO /dev/null http://payments.dom-payments/
+# 1. Generate real events: one confirmed order + one declined (GIZMO-3 = 99.99)
+kubectl -n dom-orders exec deploy/orders -c app -- \
+  wget -qO- --post-data='{"item_id":1,"qty":1}' --header='Content-Type: application/json' http://localhost:8080/orders
+kubectl -n dom-orders exec deploy/orders -c app -- \
+  wget -qO- --post-data='{"item_id":3,"qty":1}' --header='Content-Type: application/json' http://localhost:8080/orders || true
 
-# 2. Pattern A: Node stdout logs (App + Envoy JSON access log)
-kubectl -n dom-payments logs deploy/payments -c istio-proxy --tail=3
+# 2. Pattern A: Node stdout logs — real business events now, not nginx hits
+kubectl -n dom-orders   logs deploy/orders   -c app --tail=5   # "order confirmed", "payment declined, compensating", "stock restored"
+kubectl -n dom-payments logs deploy/payments -c app --tail=3   # "payment confirmed" / "payment declined"
+kubectl -n dom-payments logs deploy/payments -c istio-proxy --tail=3   # Envoy JSON access log (mTLS traffic)
 
 # 3. Pattern B: File-Tail Sidecar -> Central Log Aggregator (Filtered by domain!)
 kubectl -n observability logs deploy/log-aggregator --tail=10
@@ -345,6 +374,8 @@ kubectl -n observability logs deploy/log-aggregator --tail=10
 # 4. Pattern C: Loopback OTLP -> OTel Collector Sidecar
 kubectl -n dom-orders logs deploy/orders -c otel-collector --tail=10
 ```
+
+> **Correlation exercise:** on GCP this same trio (`order_id` in every log line) is what lets Cloud Logging + Trace stitch a single order across three services and two databases. Grep the aggregator for your `order_id` — that IS the observability story.
 
 ---
 

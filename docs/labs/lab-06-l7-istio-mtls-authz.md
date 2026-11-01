@@ -1,7 +1,7 @@
 # Lab 06 · L7 Zero-Trust Guard: Istio Sidecars, STRICT mTLS & SPIFFE AuthZ
 
-> **Core Lesson:** NetworkPolicy (L3/L4) only checks **where** a packet comes from (IP/Namespace), not **who** is calling. If a rogue pod (`intruder`) lands inside `dom-orders`, NetworkPolicy lets it call `payments` freely! Here you will add **Istio sidecar proxies (`istio-proxy`)**, fix the classic `1/2 Ready` xDS egress trap, enforce **`STRICT` mTLS**, and lock `payments` down to the cryptographic **SPIFFE identity** `cluster.local/ns/dom-orders/sa/orders`.  
-> **GCP Twin:** Phase P5 & P7 (`istiod`, `PeerAuthentication`, `AuthorizationPolicy`).
+> **Core Lesson:** NetworkPolicy (L3/L4) only checks **where** a packet comes from (IP/Namespace), not **who** is calling. If a rogue pod (`intruder`) lands inside `dom-orders`, NetworkPolicy lets it call `payments` freely! Here you will add **Istio sidecar proxies (`istio-proxy`)**, fix the classic `1/2 Ready` xDS egress trap, enforce **`STRICT` mTLS**, lock `payments` down to the cryptographic **SPIFFE identity** `cluster.local/ns/dom-orders/sa/orders` — and see exactly where L7 identity **ends**: at the TCP border of the `dom-data` tier.  
+> **GCP Twin:** Phase P5 & P7 (`istiod`, `PeerAuthentication`, `AuthorizationPolicy`) — and Cloud SQL Auth Proxy, which is how GCP restores identity *inside* the DB connection that the mesh can't see.
 
 ---
 
@@ -10,7 +10,7 @@
 ![Two guards, two failure signatures](../diagrams/lab06-mesh-guards.drawio.svg)
 
 | Security Layer | Enforced By | What It Checks | Failure Signature |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **Guard 1 (L3/L4)** | Cilium eBPF (`NetworkPolicy`) | Pod IP / Namespace label + TCP Port `8080` | **Timeout** (`wget: download timed out`) |
 | **Guard 2 (L4/L7 Crypto)** | Envoy Sidecar (`PeerAuthentication: STRICT`) | Valid X.509 mTLS client certificate signed by `istiod` Citadel CA | **Connection Reset** (`Connection reset by peer` / empty reply) |
 | **Guard 3 (L7 Identity)** | Envoy Sidecar (`AuthorizationPolicy`) | SAN field inside X.509 cert (`spiffe://cluster.local/ns/dom-orders/sa/orders`), HTTP verb/path | **HTTP 403** (`RBAC: access denied`) |
@@ -32,6 +32,7 @@ istioctl install --set profile=minimal \
 kubectl -n istio-system rollout status deploy/istiod --timeout=180s
 
 # 2. Label the 3 domain namespaces for automatic sidecar injection
+#    NOTE: dom-data stays OUT of the mesh on purpose — see Step 5 for why.
 kubectl label ns dom-orders dom-payments dom-inventory istio-injection=enabled --overwrite
 
 # 3. Check pods BEFORE restarting deployments: Notice they are still 1/1!
@@ -233,18 +234,45 @@ kubectl -n dom-payments logs deploy/payments -c istio-proxy --tail=5
 ```
 
 Clean up the `intruder` test workload:
+
 ```bash
 kubectl -n dom-orders delete deploy/intruder sa/intruder
 ```
 
 ---
 
+### Step 5: Where the Mesh Ends — the `dom-data` Boundary
+
+The DB pods run **no sidecar**. Watch what that means for each guard on the `orders → commerce-db:5432` flow:
+
+| Guard | On `orders → payments:8080` | On `orders → commerce-db:5432` |
+| --- | --- | --- |
+| Guard 1 · `NetworkPolicy` | ✅ enforced (egress+ingress) | ✅ enforced (egress `app:orders` + ingress `dom-orders`) |
+| Guard 2 · `STRICT` mTLS | ✅ client certs both ways | ❌ **server side has no envoy** — orders' proxy just does TCP passthrough, plaintext pgwire to the pod |
+| Guard 3 · `AuthorizationPolicy` | ✅ SPIFFE + HTTP verb/path | ❌ needs a server-side proxy to enforce; and pgwire has no HTTP semantics for `methods:`/`paths:` anyway |
+
+So the data tier is protected by **L4 only** — which is why the egress `podSelector` matters so much: in Step 4 you patched `orders-egress` to `podSelector: {}` (namespace-wide), but `orders-egress-data` still selects `app: orders` specifically. If the `intruder` pod were still running, its `commerce-db:5432` attempt would die at the **egress** policy even though `commerce-db-ingress` happily admits the whole `dom-orders` namespace. *Direction and granularity both count.*
+
+```bash
+# Prove the saga still works fully meshed (HTTP hops mTLS'd, DB hop plain TCP):
+kubectl -n dom-orders exec deploy/orders -c app -- \
+  wget -qO- --post-data='{"item_id":2,"qty":1}' \
+  --header='Content-Type: application/json' http://localhost:8080/orders
+# -> {"order_id":N,"status":"confirmed",...}
+```
+
+> **GCP Twin:** this is precisely the gap **Cloud SQL Auth Proxy** fills. On GKE the app pod carries a 5th container — the proxy — which presents the domain's **Workload Identity GSA** *inside* the DB handshake (IAM DB auth), restoring "who is calling" all the way into Postgres. The mesh can't identify a TCP flow; IAM can. Same lesson, different enforcement point.
+
+---
+
 ## 3. Readiness Gate G-06
 
 Without running any commands, name the exact layer and root cause for each output:
+
 1. `wget: download timed out` → **Layer 4 `NetworkPolicy` (Cilium eBPF dropped the SYN packet).**
 2. `curl: (56) Recv failure: Connection reset by peer` → **Layer 7 `PeerAuthentication: STRICT` (Caller sent plaintext instead of mTLS).**
 3. `HTTP/1.1 403 Forbidden` / `RBAC: access denied` → **Layer 7 `AuthorizationPolicy` (Valid mTLS cert, but caller's SPIFFE ServiceAccount is not in `principals`).**
+4. `psql`/app log: `connection timeout` to `commerce-db.dom-data:5432` even though every HTTP call works → **Layer 4 `NetworkPolicy` again — the `5432` egress/ingress pair is missing or the `podSelector` (e.g. `app: commerce-db`) doesn't match. No 403, no reset: TCP drops are silent.**
 
 ---
 **Next Step:** [Lab 07 · 4-Container Pod & Central Observability Pipeline →](lab-07-sidecars-central-logging.md)

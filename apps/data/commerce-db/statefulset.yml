@@ -1,0 +1,65 @@
+# commerce-db — SHARED Postgres for dom-orders + dom-inventory.
+# StatefulSet (stable name commerce-db-0, stable DNS, volumeClaimTemplates)
+# because a database is the textbook case for stateful workloads.
+apiVersion: v1
+kind: Service
+metadata:
+  name: commerce-db
+  namespace: dom-data
+spec:
+  clusterIP: None # headless -> stable DNS commerce-db-0.commerce-db.dom-data
+  selector:
+    app: commerce-db
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: commerce-db
+  namespace: dom-data
+spec:
+  serviceName: commerce-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: commerce-db
+  template:
+    metadata:
+      labels:
+        app: commerce-db
+        tier: data
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: commerce-db-auth
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "commerce"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+              subPath: pgdata # postgres needs an empty dir; PVC root has lost+found
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
