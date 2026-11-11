@@ -19,7 +19,7 @@
 
 ## 2. Visual Blueprint: Target Call Graph & Policy Matrix
 
-![Zero-trust call graph and policy matrix](../diagrams/lab05-networkpolicy-callgraph.drawio.svg)
+![Zero-trust call graph and policy matrix](../diagrams/lab05-networkpolicy-callgraph.png)
 
 ---
 

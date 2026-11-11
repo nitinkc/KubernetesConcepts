@@ -116,18 +116,10 @@ Run it now:
 When you finish a session or want to test a cold rebuild from zero:
 
 ```bash
-cat << 'EOF' > ~/acme-k8s-lab/scripts/cluster-down.sh
-#!/usr/bin/env bash
-set -euo pipefail
-
-echo "[*] Tearing down Minikube cluster 'acme' and underlay containers..."
-minikube delete -p acme || true
-docker rm -f vpc-router probe registry echo 2>/dev/null || true
-docker network rm acme-ops acme-main 2>/dev/null || true
-echo "[✓] Clean slate ready."
-EOF
-chmod +x ~/acme-k8s-lab/scripts/cluster-down.sh
+task clean   # deletes ALL lab profiles + underlay containers + acme-* networks (asks first)
 ```
+
+The full cold-rebuild runbook is the Taskfile itself: `task clean` → `task lab01:up lab01:routes lab01:firewall` → `task lab02:up` → `task lab03:images lab03:data lab03:domains` → `task verify:all`. Time it once — that's your rebuild SLO evidence.
 
 ---
 
@@ -159,3 +151,6 @@ Verify you can answer all 5 GCP transition questions:
 6. **A GCP Load Balancer returns `502 Bad Gateway` — why is that usually a health-check/firewall issue, not an app bug?** *(Google LBs health-check each backend from `130.211.0.0/22` and `35.191.0.0/16`; if those ranges (or the readiness probe path/port) are blocked by VPC firewall or NetworkPolicy, backends are marked unhealthy and the LB returns 502 even while the app is running fine. On GKE, backends are NEGs — pods get health-checked directly).*
 7. **A pod needs to call Cloud Storage — name the three things that must line up for Workload Identity, and what replaces a `.env` file with credentials?** *(KSA annotated `iam.gke.io/gcp-service-account` + IAM binding `roles/iam.workloadIdentityUser` on `proj.svc.id.goog[dom-x/ksa]` + Egress NetworkPolicy allowing `169.254.169.252:988`. Secrets live in **Secret Manager**, synced via External Secrets Operator — no hardcoded keys or `.env` files).*
 8. **How do the domain pods reach `commerce-sql`/`payments-sql` on GCP, and why does the Cloud SQL Auth Proxy restore "who is calling" that the mesh lost at `dom-data`?** *(Cloud SQL instances get private IPs on the PSA range `100.64.0.0/20`; the Auth Proxy rides as a 5th container in each domain pod and presents the pod's Workload Identity GSA **inside** the Postgres handshake via IAM DB auth — Lab 06 Step 5 showed the mesh can't identify a raw TCP flow; IAM can. `DATABASE_URL` simply flips to `127.0.0.1:5432` because the proxy shares the pod's loopback interface).*
+
+---
+**Next Step:** [Lab 11 · Multi-Region Federation & ClusterMesh →](lab-11-multiregion-federation.md)

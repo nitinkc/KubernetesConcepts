@@ -49,162 +49,25 @@ sequenceDiagram
 The domain apps live in this repo under `apps/` — three tiny services, three different languages, one shared contract (`/healthz`, `/readyz`, `/work`, plus the real endpoints). Build them, plus pull the sidecar/DB/base images, and load everything into the Minikube nodes **and** your local registry (`10.10.0.200:5000`) so they survive when we cut internet access in Lab 04:
 
 ```bash
-# From the repo root — build the three domain images
-docker build -t acme/orders:v1    apps/orders      # Go: POST /orders saga
-docker build -t acme/inventory:v1 apps/inventory   # Node: GET /items on commerce-db
-docker build -t acme/payments:v1  apps/payments    # Python: POST /charge on payments-db
-
-# Pull base/sidecar/DB images on host
-docker pull nginxinc/nginx-unprivileged:alpine   # probe/debug pods
-docker pull curlimages/curl:latest
-docker pull postgres:16-alpine                   # commerce-db + payments-db + seed Job
-docker pull fluent/fluent-bit:3.2
-docker pull otel/opentelemetry-collector:0.114.0
-
-# Load everything into Minikube nodes
-for img in acme/orders:v1 acme/inventory:v1 acme/payments:v1 \
-           nginxinc/nginx-unprivileged:alpine curlimages/curl:latest \
-           postgres:16-alpine fluent/fluent-bit:3.2 otel/opentelemetry-collector:0.114.0; do
-  minikube image load -p acme "$img"
-done
-
-# On GCP these same images come from Artifact Registry — the local registry at
-# 10.10.0.200:5000 is its twin (Door 1, Lab 04)
-docker tag acme/orders:v1 localhost:5000/acme/orders:v1
+task lab03:images   # builds the 3 domain apps, pulls base/sidecar/DB images,
+                    # loads all 8 into every minikube node
 ```
+
+On GCP these same images come from Artifact Registry — the local registry at `10.10.0.200:5000` is its twin (Door 1, Lab 04).
 
 ---
 
 ### Step 2: Create the Reusable Tier-2 Helm Chart (`charts/acme-microservice`)
 
-Create the chart once. Notice how `sidecars.fluentbit.enabled` and `sidecars.otel.enabled` are built-in toggles (off in Lab 03, turned on in Lab 07) and `serviceAccount.gsaEmail` prepares for GKE Workload Identity:
+Create the chart once. Notice how `sidecars.fluentbit.enabled` and `sidecars.otel.enabled` are built-in toggles
+(off in Lab 03, turned on in Lab 07) and `serviceAccount.gsaEmail` prepares for GKE Workload Identity:
 
 ```bash
-mkdir -p ~/acme-k8s-lab/charts/acme-microservice/templates
-
-cat << 'EOF' > ~/acme-k8s-lab/charts/acme-microservice/Chart.yaml
-apiVersion: v2
-name: acme-microservice
-description: Tier-2 Reusable Platform Helm Chart for Acme Labs Domains
-type: application
-version: 0.2.0
-appVersion: "1.0.0"
-EOF
-
-cat << 'EOF' > ~/acme-k8s-lab/charts/acme-microservice/values.yaml
-domain: orders
-replicas: 1
-image:
-  repository: nginxinc/nginx-unprivileged
-  tag: alpine
-  pullPolicy: IfNotPresent
-service:
-  port: 80
-  targetPort: 8080
-serviceAccount:
-  gsaEmail: ""   # On GCP: orders-app@my-devops-journey-502420.iam.gserviceaccount.com
-env: {}            # plain env vars, e.g. PAYMENTS_URL
-envFromSecrets: [] # e.g. [db-creds] -> envFrom secretRef, injects DATABASE_URL
-probes:
-  readiness:
-    enabled: false
-    path: /readyz
-resources:
-  requests:
-    cpu: 50m
-    memory: 64Mi
-  limits:
-    memory: 128Mi
-sidecars:
-  fluentbit:
-    enabled: false
-    image: fluent/fluent-bit:3.2
-  otel:
-    enabled: false
-    image: otel/opentelemetry-collector:0.114.0
-EOF
-
-cat << 'EOF' > ~/acme-k8s-lab/charts/acme-microservice/templates/all.yaml
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: {{ .Values.domain }}
-  namespace: dom-{{ .Values.domain }}
-  {{- if .Values.serviceAccount.gsaEmail }}
-  annotations:
-    iam.gke.io/gcp-service-account: {{ .Values.serviceAccount.gsaEmail | quote }}
-  {{- end }}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ .Values.domain }}
-  namespace: dom-{{ .Values.domain }}
-  labels:
-    app: {{ .Values.domain }}
-    domain: {{ .Values.domain }}
-spec:
-  selector:
-    app: {{ .Values.domain }}
-  ports:
-    - name: http
-      port: {{ .Values.service.port }}
-      targetPort: {{ .Values.service.targetPort }}
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: {{ .Values.domain }}
-  namespace: dom-{{ .Values.domain }}
-spec:
-  replicas: {{ .Values.replicas }}
-  selector:
-    matchLabels:
-      app: {{ .Values.domain }}
-  template:
-    metadata:
-      labels:
-        app: {{ .Values.domain }}
-        domain: {{ .Values.domain }}
-    spec:
-      serviceAccountName: {{ .Values.domain }}
-      containers:
-        - name: app
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          ports:
-            - containerPort: {{ .Values.service.targetPort }}
-          {{- if .Values.env }}
-          env:
-            {{- range $k, $v := .Values.env }}
-            - name: {{ $k }}
-              value: {{ $v | quote }}
-            {{- end }}
-          {{- end }}
-          {{- if .Values.envFromSecrets }}
-          envFrom:
-            {{- range .Values.envFromSecrets }}
-            - secretRef:
-                name: {{ . }}
-            {{- end }}
-          {{- end }}
-          {{- if .Values.probes.readiness.enabled }}
-          readinessProbe:
-            httpGet:
-              path: {{ .Values.probes.readiness.path }}
-              port: {{ .Values.service.targetPort }}
-            initialDelaySeconds: 3
-            periodSeconds: 5
-          {{- end }}
-          resources:
-            {{- toYaml .Values.resources | nindent 12 }}
-EOF
-
-# Lint the chart to verify syntax
-helm lint ~/acme-k8s-lab/charts/acme-microservice
+task lab03:chart   # copies the vendored charts/acme-microservice into
+                   # ~/acme-k8s-lab/charts/ (idempotent) + helm lint
 ```
 
-> **Shortcut:** this exact chart is also vendored in the repo at `charts/acme-microservice/` — Labs 09 and 10 consume it from there.
+The chart source itself lives at `charts/acme-microservice/` — open `values.yaml` and `templates/all.yaml` to see how every `--set` flag below lands.
 
 ---
 
@@ -213,24 +76,8 @@ helm lint ~/acme-k8s-lab/charts/acme-microservice
 The databases ship as plain manifests in `apps/data/` (a StatefulSet each — the textbook stateful workload — plus per-domain DSN Secrets and an idempotent seed Job). **Order matters:** namespaces first, then Secrets, then the DBs, then the seed.
 
 ```bash
-# From the repo root
-kubectl apply -f apps/data/namespace.yml
-
-# Pre-create the domain namespaces so their db-creds Secrets can exist
-for d in orders payments inventory; do
-  kubectl create ns "dom-$d" --dry-run=client -o yaml | kubectl apply -f -
-done
-
-kubectl apply -f apps/data/secrets.yml                       # db-auth + per-domain DATABASE_URL
-kubectl apply -f apps/data/commerce-db/statefulset.yml
-kubectl apply -f apps/data/payments-db/statefulset.yml
-kubectl -n dom-data rollout status statefulset/commerce-db --timeout=120s
-kubectl -n dom-data rollout status statefulset/payments-db --timeout=120s
-
-# Seed: creates roles/schemas/tables + 3 demo items (idempotent — safe to re-run)
-kubectl apply -f apps/data/seed-job.yml
-kubectl -n dom-data wait --for=condition=complete job/db-seed --timeout=120s
-kubectl -n dom-data logs job/db-seed
+task lab03:data   # namespace -> dom-* ns -> secrets -> 2 StatefulSets -> seed Job
+                  # (waits on each rollout; seed is idempotent, safe to re-run)
 
 # Peek inside: the shared commerce-db holds BOTH schemas
 kubectl -n dom-data exec commerce-db-0 -- psql -U postgres -d commerce \
@@ -244,33 +91,11 @@ kubectl -n dom-data exec commerce-db-0 -- psql -U postgres -d commerce \
 ### Step 4: Deploy All 3 Isolated Domains (`orders`, `payments`, `inventory`)
 
 ```bash
-kubectl create ns observability --dry-run=client -o yaml | kubectl apply -f -
-
-# orders — the public saga driver: needs downstream URLs + shared-DB creds
-helm upgrade --install orders ~/acme-k8s-lab/charts/acme-microservice \
-  --namespace dom-orders --set domain=orders \
-  --set image.repository=acme/orders --set image.tag=v1 \
-  --set env.PAYMENTS_URL=http://payments.dom-payments \
-  --set env.INVENTORY_URL=http://inventory.dom-inventory \
-  --set envFromSecrets="{db-creds}" \
-  --set probes.readiness.enabled=true \
-  --set serviceAccount.gsaEmail="orders-app@my-devops-journey-502420.iam.gserviceaccount.com"
-
-# payments — own private DB
-helm upgrade --install payments ~/acme-k8s-lab/charts/acme-microservice \
-  --namespace dom-payments --set domain=payments \
-  --set image.repository=acme/payments --set image.tag=v1 \
-  --set envFromSecrets="{db-creds}" \
-  --set probes.readiness.enabled=true \
-  --set serviceAccount.gsaEmail="payments-app@my-devops-journey-502420.iam.gserviceaccount.com"
-
-# inventory — reads/writes the shared commerce-db
-helm upgrade --install inventory ~/acme-k8s-lab/charts/acme-microservice \
-  --namespace dom-inventory --set domain=inventory \
-  --set image.repository=acme/inventory --set image.tag=v1 \
-  --set envFromSecrets="{db-creds}" \
-  --set probes.readiness.enabled=true \
-  --set serviceAccount.gsaEmail="inventory-app@my-devops-journey-502420.iam.gserviceaccount.com"
+task lab03:domains   # observability ns + 3 helm installs:
+                     #   orders   (dom-orders:    PAYMENTS_URL + INVENTORY_URL env, db-creds)
+                     #   payments (dom-payments:  own private DB, db-creds)
+                     #   inventory(dom-inventory: shared commerce-db, db-creds)
+                     # each gets its own gsaEmail annotation for GKE Workload Identity
 
 # Verify all pods, Services, and EndpointSlices across domains + data tier
 kubectl get pods,svc,endpointslices -n dom-orders -n dom-payments -n dom-inventory -n dom-data -o wide

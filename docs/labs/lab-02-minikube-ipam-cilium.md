@@ -17,7 +17,7 @@
 
 ## 2. Visual Blueprint: The 3 Address Spaces & eBPF Datapath
 
-![Three address spaces — node / pod / service](../diagrams/lab02-address-spaces.drawio.svg)
+![Three address spaces — node / pod / service](../diagrams/lab02-address-spaces.png)
 
 ### CIDR Capacity Math (Do This Before Every Cluster Build)
 
@@ -29,58 +29,29 @@
 
 ## 3. Step-by-Step Hands-On Build
 
+> **Commands live in `Taskfile.yml`.** Each step names its `task` (`task --list` for the full order). Remaining inline commands are verification or drills — evidence, not boilerplate.
+
 ### Step 1: Boot the 3-Node Minikube Cluster on `acme-main`
 
 ```bash
-# Start 3-node cluster attached to acme-main with explicit CIDRs
-minikube start -p acme \
-  --driver=docker \
-  --container-runtime=containerd \
-  --nodes=3 \
-  --cpus=2 --memory=3072 \
-  --network=acme-main \
-  --static-ip=10.10.0.10 \
-  --service-cluster-ip-range=10.30.0.0/24 \
-  --extra-config=kubeadm.pod-network-cidr=10.20.0.0/20 \
-  --extra-config=controller-manager.allocate-node-cidrs=true \
-  --cni=bridge
-
-# Ensure kubectl context points to 'acme'
-kubectl config use-context acme
-
-# Wire return routes on the 3 new Minikube nodes so acme-ops (probe) can talk to them
-~/acme-k8s-lab/scripts/routes.sh
+task lab02:start    # boots 'acme' on acme-main: 3 nodes, CP 10.10.0.10,
+                    # pods 10.20.0.0/20, svc 10.30.0.0/24, bridge CNI
+task lab01:routes   # return routes so acme-ops (probe) can reach the new nodes
 ```
+
+> **The profile name is load-bearing — it must be `acme`.** `routes.sh` finds nodes by the `name.minikube.sigs.k8s.io=acme` container label, and Labs 04/10 hardcode `acme-m02`/`acme-m03`. A differently-named profile (`-p acme-cluster`) gets its own isolated docker network and silently misses every later step. If a profile exists half-built, `task clean` first.
 
 ---
 
 ### Step 2: Install Cilium CNI + Hubble (GKE Dataplane V2 Engine)
 
+Container Network Interface (CNI) : Cilium CNI is an open-source Container Network Interface (CNI) plugin for Kubernetes
+and other container orchestration platforms that provides high-performance networking, security, and observability
+
 ```bash
-helm repo add cilium https://helm.cilium.io && helm repo update
-
-# Remove default bridge CNI config on nodes so Cilium becomes the primary CNI
-for n in $(minikube node list -p acme | awk '{print $1}'); do
-  docker exec "$n" sh -c 'rm -f /etc/cni/net.d/*bridge* /etc/cni/net.d/*kindnet* /etc/cni/net.d/10-containerd*' || true
-done
-
-# Install Cilium using Kubernetes node.spec.podCIDR allocation (10.20.0.0/20)
-helm upgrade --install cilium cilium/cilium -n kube-system \
-  --set ipam.mode=kubernetes \
-  --set routingMode=tunnel \
-  --set tunnelProtocol=vxlan \
-  --set devices=eth0 \
-  --set hubble.relay.enabled=true \
-  --set hubble.ui.enabled=true
-
-# Wait for Cilium DaemonSet and restart CoreDNS so all pods get 10.20.x.x IPs
-kubectl -n kube-system rollout status ds/cilium --timeout=300s
-kubectl -n kube-system rollout restart deploy/coredns
-kubectl -n kube-system rollout status deploy/coredns --timeout=120s
-
-# Label worker nodes to mirror GKE node pools and network tags
-kubectl label node acme-m02 pool=main --overwrite
-kubectl label node acme-m03 pool=main allowed-open-nat=true --overwrite
+task lab02:cilium   # removes bridge CNI on all nodes, installs Cilium via Helm
+                    # (ipam.mode=kubernetes + vxlan + Hubble), restarts CoreDNS,
+                    # labels m02 pool=main and m03 pool=main allowed-open-nat=true
 ```
 
 ---
@@ -90,24 +61,14 @@ kubectl label node acme-m03 pool=main allowed-open-nat=true --overwrite
 Run these four commands and verify every range matches your IPAM blueprint:
 
 ```bash
-# 1. Node IPs (10.10.0.10, .11, .12) and Per-Node Pod CIDRs (10.20.0.0/24, 10.20.1.0/24, 10.20.2.0/24)
-kubectl get nodes -o custom-columns=\
-NAME:.metadata.name,\
-NODE_IP:.status.addresses[0].address,\
-POD_CIDR:.spec.podCIDR,\
-POOL:.metadata.labels.pool,\
-NAT_TAG:.metadata.labels.allowed-open-nat
-
-# 2. Service CIDR (kubernetes.default = 10.30.0.1, kube-dns = 10.30.0.10)
-kubectl get svc -A
-
-# 3. Pod IPs: Notice which pods have Node IPs (10.10.0.x) vs Pod IPs (10.20.x.x)!
-kubectl get pods -n kube-system -o custom-columns=\
-NAME:.metadata.name,IP:.status.podIP,NODE:.spec.nodeName,HOST_NET:.spec.hostNetwork
-
-# 4. Cilium status & endpoint table
-kubectl -n kube-system exec ds/cilium -- cilium status --brief
+task lab02:verify   # nodes -o wide + svc -A + cilium status --brief
 ```
+
+What you're looking for in that output:
+
+1. **Node IPs** `10.10.0.10/.11/.12` and per-node pod CIDRs `10.20.0.0/24`, `10.20.1.0/24`, `10.20.2.0/24` (check `.spec.podCIDR` per node).
+2. **Service CIDR** — `kubernetes.default` = `10.30.0.1`, `kube-dns` = `10.30.0.10`.
+3. **Pod IPs** — notice which kube-system pods show Node IPs (`10.10.0.x`) vs Pod IPs (`10.20.x.x`).
 
 > **Architect's Observation:** Why do `kube-apiserver`, `etcd`, `kube-proxy`, and `cilium` show `10.10.0.x` (Node IP) instead of `10.20.x.x`? Because they set `hostNetwork: true`—they must run in the node's root network namespace to program the networkbefore any Pod network exists!
 
@@ -118,16 +79,7 @@ kubectl -n kube-system exec ds/cilium -- cilium status --brief
 Configure `containerd` on all three Minikube nodes to allow pulling from our HTTP local registry (`10.10.0.200:5000`) on `acme-main`:
 
 ```bash
-for n in acme acme-m02 acme-m03; do
-  docker exec "$n" bash -c '
-    mkdir -p /etc/containerd/certs.d/10.10.0.200:5000
-    cat <<EOF > /etc/containerd/certs.d/10.10.0.200:5000/hosts.toml
-server = "http://10.10.0.200:5000"
-[host."http://10.10.0.200:5000"]
-  capabilities = ["pull", "resolve", "push"]
-  skip_verify = true
-EOF'
-done
+task lab02:registry   # writes containerd hosts.toml for 10.10.0.200:5000 on all 3 nodes
 ```
 
 ---

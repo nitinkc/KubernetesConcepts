@@ -7,7 +7,7 @@
 
 ## 1. Architecture Decision: Why Do Enterprises Use 3 Telemetry Paths?
 
-![4-container pod — three telemetry paths](../diagrams/lab07-pod-telemetry.drawio.svg)
+![4-container pod — three telemetry paths](../diagrams/lab07-pod-telemetry.png)
 
 | Nuance | What Happens If You Get It Wrong |
 | --- | --- |

@@ -3,14 +3,14 @@
 > **Core Lesson:** Kubernetes **sits on top of** the network; it cannot create VPCs, subnets, route tables, or cloud firewalls. Before starting Minikube, you will build the underlay network yourself using two Docker bridge subnets, a dual-homed Linux router container (`vpc-router`), and `iptables` connection tracking.
 > **GCP Twin:** Phase P3 (`google_compute_network`, `google_compute_subnetwork`, `google_compute_route`, `google_compute_firewall`, IAP bastion VM).
 
+[RFC 1918 — Address Allocation for Private Internets](https://www.rfc-editor.org/info/rfc1918)
+
 ## Step 0 — The Starting Point: Repos & Folders
 
 One VPC `acme-main` (np) — **both subnets are private**; there is no public subnet because the default internet route is deleted at birth (that's Lab 04):
 
-- `gke-main` `10.10.0.0/24` — the cluster subnet (nodes; pod `10.20.0.0/20` + svc `10.30.0.0/24` are *secondary ranges inside it*, not separate subnets)
-- `ops` `10.10.1.0/28` — the bastion/probe subnet; admin traffic enters here and must route + pass firewall to reach the cluster
-
-Everything the labs build lives in one of two places — **this repo** (the lab site + runnable manifests) and **`~/acme-k8s-lab`** (your scratch dir for generated artifacts). On GCP, each piece maps to a real GitLab project:
+- subnet `gke-main` `10.10.0.0/24` — the **cluster subnet** (nodes; pod `10.20.0.0/20` + svc `10.30.0.0/24` are *secondary ranges inside it*, not separate subnets)
+- subnet `ops` `10.10.1.0/28` — the **bastion/probe subnet**; admin traffic enters here and must route + pass firewall to reach the cluster
 
 ```text
 KubernetesConcepts/                 ← this repo (lab docs + runnable manifests)
@@ -34,8 +34,6 @@ environments/
 └─ prod = acme-labs-p-<suffix>      → state+SAs only, pipeline-p (protected main) / pipeline-p-ro, flux clusters/p
 ```
 
-[RFC 1918 — Address Allocation for Private Internets](https://www.rfc-editor.org/info/rfc1918)
-
 ---
 
 ## 1. Architecture Decision: Where Does Underlay End and Kubernetes Begin?
@@ -46,22 +44,24 @@ environments/
 | **Why do we need `conntrack ESTABLISHED,RELATED` on the firewall?** | GCP VPC Firewalls are **stateful**: if you allow `probe -> API Server (6443)`, the return packet (`6443 -> probe`) is automatically allowed. Raw `iptables` with `FORWARD DROP` is **stateless** until you explicitly add a `conntrack` rule. Forgetting this creates the classic "one-way ping / asymmetric drop" bug. |
 | **Why pre-deploy a local registry (`10.10.0.200`) and echo server (`10.10.0.201`)?** | In Lab 04, we will delete the default internet route (`0.0.0.0/0`). Having `10.10.0.200:5000` on `acme-main` gives us a local twin of **GCP Artifact Registry over Private Google Access (Door 1)**, and `echo` (`10.10.0.201`) logs client source IPs to prove Pod SNAT/masquerade. |
 
+
+
 ---
 
 ## 2. Visual Blueprint: The Underlay Topology
 
-![Underlay topology — two Docker subnets, router, stateful firewall](../diagrams/lab01-underlay-topology.drawio.svg)
+![Underlay topology — two Docker subnets, router, stateful firewall](../diagrams/lab01-underlay-topology.png)
 
 ---
 
 ## 3. Step-by-Step Hands-On Build
 
+> **Commands live in `Taskfile.yml`.** Each step below names its `task` — run `task --list` to see the whole build order. Inline commands that remain are *verification or break/drill commands* — the evidence you're meant to read, not boilerplate.
+
 ### Step 1: Create the Two Subnets (`acme-main` & `acme-ops`)
 
 ```bash
-# Create primary cluster subnet (10.10.0.0/24) and ops/bastion subnet (10.10.1.0/28)
-docker network create --driver bridge --subnet 10.10.0.0/24 --gateway 10.10.0.1 acme-main
-docker network create --driver bridge --subnet 10.10.1.0/28 --gateway 10.10.1.1 acme-ops
+task lab01:up   # creates BOTH subnets AND the 4 containers in Step 2 (idempotent)
 
 # Verify both networks exist with exact CIDRs
 docker network inspect acme-main acme-ops \
@@ -106,34 +106,14 @@ The default gateway (your router) is actually a standard host device on the netw
 
 ### Step 2: Launch `vpc-router`, `probe`, `registry`, and `echo`
 
-```bash
-# 1. Create ROUTER : Dual-homed router container with IPv4 forwarding enabled
-docker run -d --name vpc-router \
-  --cap-add NET_ADMIN \
-  --sysctl net.ipv4.ip_forward=1 \
-  --network acme-main --ip 10.10.0.250 \
-  nicolaka/netshoot sleep infinity
+`task lab01:up` already launched all four — what each one twins:
 
-# Attach second NIC on acme-ops
-docker network connect --ip 10.10.1.2 acme-ops vpc-router
-
-# 2. Ops bastion ("probe") in acme-ops
-docker run -d --name probe \
-  --cap-add NET_ADMIN \
-  --network acme-ops --ip 10.10.1.3 \
-  nicolaka/netshoot sleep infinity
-
-# 3. Private Registry ("Door 1" Artifact Registry stand-in) on acme-main
-docker run -d --name registry \
-  --network acme-main --ip 10.10.0.200 \
-  registry:2
-
-# 4. Echo server (logs client source IPs) with NET_ADMIN so we can add return routes
-docker run -d --name echo \
-  --cap-add NET_ADMIN \
-  --network acme-main --ip 10.10.0.201 \
-  nginx:alpine
-```
+| Container | Address | Role | GCP twin |
+| --- | --- | --- | --- |
+| `vpc-router` | `10.10.0.250` (main) + `10.10.1.2` (ops), dual-homed | Router between subnets, `ip_forward=1`, hosts the firewall | Cloud Router + VPC firewall |
+| `probe` | `10.10.1.3` | Ops bastion — your "corporate HQ" client | Bastion host / on-prem client |
+| `registry` | `10.10.0.200` | Private image registry | Artifact Registry (Door 1) |
+| `echo` | `10.10.0.201` | nginx logging client source IPs | Test backend behind the firewall |
 
 Verify the router has **two interfaces** (`eth0` on `10.10.0.250/24` and `eth1` on `10.10.1.2/28`):
 
@@ -190,6 +170,8 @@ docker exec probe ping -c 2 10.10.0.201
 docker exec probe curl -sI http://10.10.0.201 | head -n 1
 ```
 
+That manual dance was the lesson — from now on, `task lab01:routes` applies the same end state idempotently.
+
 ---
 
 ### Step 4: Enforce a Stateful Firewall on `vpc-router` (GCP VPC Firewall Twin)
@@ -197,15 +179,8 @@ docker exec probe curl -sI http://10.10.0.201 | head -n 1
 By default, Linux `FORWARD` policy is `ACCEPT` (everything talks to everything). On GCP, VPC ingress is **deny-all by default**, and you open specific ports via `google_compute_firewall`. Let's configure `vpc-router` to match GCP:
 
 ```bash
-# 1. Default DENY all routed traffic between subnets
-docker exec vpc-router iptables -F FORWARD
-docker exec vpc-router iptables -P FORWARD DROP
-
-# 2. Make the firewall STATEFUL (allow return packets for established flows)
-docker exec vpc-router iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-
-# 3. Allow ICMP (ping) for diagnostics
-docker exec vpc-router iptables -A FORWARD -p icmp -j ACCEPT
+task lab01:firewall   # FORWARD policy DROP + conntrack ESTABLISHED,RELATED + ICMP allow
+                      # (order matters: routes from Step 3 first, THEN close the door)
 
 # 4. Verify: Ping works, but HTTP (port 80) to echo is BLOCKED!
 docker exec probe ping -c 1 10.10.0.201
@@ -217,38 +192,9 @@ docker exec vpc-router iptables -L FORWARD -n -v --line-numbers
 
 ---
 
-### Step 5: Save Your Reusable `scripts/routes.sh`
+### Step 5: Your Reusable `routes.sh`
 
-Because container routing tables live in volatile kernel memory, restarting a container or Minikube node wipes manual routes. Save this idempotent script right now:
-
-```bash
-cat << 'EOF' > ~/acme-k8s-lab/scripts/routes.sh
-#!/usr/bin/env bash
-set -euo pipefail
-
-echo "[*] Applying underlay routes across acme-ops and acme-main..."
-
-# 1. Forward route on probe -> acme-main via vpc-router
-docker exec probe ip route replace 10.10.0.0/24 via 10.10.1.2
-
-# 2. Return route on helper containers -> acme-ops via vpc-router
-for c in echo; do
-  if docker ps --format '{{.Names}}' | grep -qx "$c"; then
-    docker exec "$c" ip route replace 10.10.1.0/28 via 10.10.0.250
-  fi
-done
-
-# 3. Return route on all running Minikube nodes in profile 'acme'
-for n in $(docker ps --filter "label=name.minikube.sigs.k8s.io=acme" --format '{{.Names}}'); do
-  echo " -> Adding return route 10.10.1.0/28 on node $n"
-  docker exec "$n" ip route replace 10.10.1.0/28 via 10.10.0.250
-done
-
-echo "[✓] All routes synchronized."
-EOF
-chmod +x ~/acme-k8s-lab/scripts/routes.sh
-~/acme-k8s-lab/scripts/routes.sh
-```
+Because container routing tables live in volatile kernel memory, restarting a container or Minikube node wipes manual routes. The idempotent fix-it script is vendored at `./acme-k8s-lab/routes.sh` — open it and read the three route blocks (probe forward-route, helper return-routes, Minikube-node return-routes selected by the `name.minikube.sigs.k8s.io=acme` label). Run it via `task routes` after **every** restart — this is triage signature #03.
 
 ---
 

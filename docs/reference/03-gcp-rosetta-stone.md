@@ -6,7 +6,7 @@
 
 ## 1. Visual Architecture Mapping: Local Lab ⇄ GCP Production
 
-![Local Lab ⇄ GCP mapping](../diagrams/rosetta-local-vs-gcp.drawio.svg)
+![Local Lab ⇄ GCP mapping](../diagrams/rosetta-local-vs-gcp.png)
 
 ---
 

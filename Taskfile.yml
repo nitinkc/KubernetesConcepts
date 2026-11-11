@@ -1,0 +1,326 @@
+version: '3'
+
+# Acme Labs — lab lifecycle automation.
+# Tasks run the SAME commands shown in docs/labs/*.md — the docs stay the
+# source of truth; this file just saves the typing. Break/restore drills
+# (iptables, route deletion, heredoc policies) intentionally stay manual —
+# they are the lesson.
+#
+# Usage:
+#   task --list              # show every task
+#   task lab01:up            # build the Docker underlay
+#   task lab02:up            # boot the 3-node cluster + Cilium
+#   task lab11:region REGION=asia OCTET=12 ID=3
+#
+# Install: brew install go-task
+
+vars:
+  PROFILE: acme            # us hub cluster (Lab 02)
+  CHART: ~/acme-k8s-lab/charts/acme-microservice
+
+silent: false
+
+tasks:
+
+  default:
+    cmds:
+      - task --list
+
+  # ════════════════ Lab 01 · Docker underlay (VPC + router + firewall) ════
+
+  lab01:up:
+    desc: "Create acme-main/acme-ops networks + vpc-router/probe/registry/echo (idempotent)"
+    cmds:
+      - docker network inspect acme-main >/dev/null 2>&1 || docker network create --driver bridge --subnet 10.10.0.0/24 --gateway 10.10.0.1 acme-main
+      - docker network inspect acme-ops  >/dev/null 2>&1 || docker network create --driver bridge --subnet 10.10.1.0/28 --gateway 10.10.1.1 acme-ops
+      - docker ps -a | awk '{print $NF}' | grep -qx vpc-router || docker run -d --name vpc-router --cap-add NET_ADMIN --sysctl net.ipv4.ip_forward=1 --network acme-main --ip 10.10.0.250 nicolaka/netshoot sleep infinity
+      - docker network connect --ip 10.10.1.2 acme-ops vpc-router 2>/dev/null || true
+      - docker ps -a | awk '{print $NF}' | grep -qx probe    || docker run -d --name probe    --cap-add NET_ADMIN --network acme-ops  --ip 10.10.1.3  nicolaka/netshoot sleep infinity
+      - docker ps -a | awk '{print $NF}' | grep -qx registry || docker run -d --name registry --network acme-main --ip 10.10.0.200 registry:2
+      - docker ps -a | awk '{print $NF}' | grep -qx echo     || docker run -d --name echo     --cap-add NET_ADMIN --network acme-main --ip 10.10.0.201 nginx:alpine
+      - docker exec vpc-router ip -br addr
+
+  lab01:routes:
+    desc: "Wire probe/echo routes + re-run routes.sh (needed after every restart)"
+    cmds:
+      - docker exec probe ip route replace 10.10.0.0/24 via 10.10.1.2
+      - docker exec echo  ip route replace 10.10.1.0/28 via 10.10.0.250
+      - ./acme-k8s-lab/routes.sh
+    deps: ["lab01:up"]
+
+  lab01:firewall:
+    desc: "Default-deny FORWARD + conntrack + ICMP on vpc-router (GCP VPC firewall twin)"
+    cmds:
+      - docker exec vpc-router iptables -F FORWARD
+      - docker exec vpc-router iptables -P FORWARD DROP
+      - docker exec vpc-router iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+      - docker exec vpc-router iptables -A FORWARD -p icmp -j ACCEPT
+      - docker exec vpc-router iptables -L FORWARD -n -v --line-numbers
+
+  lab01:verify:
+    desc: "Expect: ping OK, HTTP 000 blocked"
+    cmds:
+      - docker exec probe ping -c 1 10.10.0.201
+      - |
+        docker exec probe curl -sS -m 3 -o /dev/null -w 'HTTP Code: %{http_code}\n' http://10.10.0.201 \
+          || echo "Blocked by firewall as expected"
+
+  # ════════════════ Lab 02 · Minikube 3-node + Cilium ═══════════════════════
+
+  lab02:up:
+    desc: "Boot acme 3-node cluster on acme-main + routes + Cilium + labels"
+    deps: ["lab02:start", "lab01:routes", "lab02:cilium"]
+
+  lab02:start:
+    desc: "minikube start -p acme --nodes=3 on acme-main (delete existing profile first if half-built)"
+    cmds:
+      - |
+        minikube start -p {{.PROFILE}} \
+          --driver=docker \
+          --container-runtime=containerd \
+          --nodes=3 \
+          --cpus=2 --memory=3072 \
+          --network=acme-main \
+          --static-ip=10.10.0.10 \
+          --service-cluster-ip-range=10.30.0.0/24 \
+          --extra-config=kubeadm.pod-network-cidr=10.20.0.0/20 \
+          --extra-config=controller-manager.allocate-node-cidrs=true \
+          --cni=bridge
+      - kubectl config use-context {{.PROFILE}}
+
+  lab02:cilium:
+    desc: "Remove bridge CNI, install Cilium (k8s IPAM + Hubble), label workers"
+    cmds:
+      - helm repo add cilium https://helm.cilium.io && helm repo update
+      - |
+        for n in $(minikube node list -p {{.PROFILE}} | awk '{print $1}'); do
+          docker exec "$n" sh -c 'rm -f /etc/cni/net.d/*bridge* /etc/cni/net.d/*kindnet* /etc/cni/net.d/10-containerd*' || true
+        done
+      - |
+        helm upgrade --install cilium cilium/cilium -n kube-system \
+          --set ipam.mode=kubernetes \
+          --set routingMode=tunnel \
+          --set tunnelProtocol=vxlan \
+          --set devices=eth0 \
+          --set hubble.relay.enabled=true \
+          --set hubble.ui.enabled=true
+      - kubectl -n kube-system rollout status ds/cilium --timeout=300s
+      - kubectl -n kube-system rollout restart deploy/coredns
+      - kubectl -n kube-system rollout status deploy/coredns --timeout=120s
+      - kubectl label node {{.PROFILE}}-m02 pool=main --overwrite
+      - kubectl label node {{.PROFILE}}-m03 pool=main allowed-open-nat=true --overwrite
+
+  lab02:registry:
+    desc: "Trust the 10.10.0.200:5000 registry in containerd on all 3 nodes (Door 1 prep)"
+    cmds:
+      - |
+        for n in {{.PROFILE}} {{.PROFILE}}-m02 {{.PROFILE}}-m03; do
+          docker exec "$n" bash -c '
+            mkdir -p /etc/containerd/certs.d/10.10.0.200:5000
+            cat <<EOF > /etc/containerd/certs.d/10.10.0.200:5000/hosts.toml
+        server = "http://10.10.0.200:5000"
+        [host."http://10.10.0.200:5000"]
+          capabilities = ["pull", "resolve", "push"]
+          skip_verify = true
+        EOF'
+        done
+
+  lab02:verify:
+    desc: "Expect 3 nodes, podCIDRs 10.20.0-2.0/24, svc 10.30.x"
+    cmds:
+      - kubectl get nodes -o wide
+      - kubectl get svc -A
+      - kubectl -n kube-system exec ds/cilium -- cilium status --brief
+
+  # ════════════════ Lab 03 · Domain apps + data tier ═══════════════════════
+
+  lab03:images:
+    desc: "Build 3 domain apps, pull sidecar/DB images, load into minikube"
+    cmds:
+      - docker build -t acme/orders:v1    apps/orders
+      - docker build -t acme/inventory:v1 apps/inventory
+      - docker build -t acme/payments:v1  apps/payments
+      - docker pull nginxinc/nginx-unprivileged:alpine
+      - docker pull curlimages/curl:latest
+      - docker pull postgres:16-alpine
+      - docker pull fluent/fluent-bit:3.2
+      - docker pull otel/opentelemetry-collector:0.114.0
+      - |
+        for img in acme/orders:v1 acme/inventory:v1 acme/payments:v1 \
+                   nginxinc/nginx-unprivileged:alpine curlimages/curl:latest \
+                   postgres:16-alpine fluent/fluent-bit:3.2 otel/opentelemetry-collector:0.114.0; do
+          minikube image load -p {{.PROFILE}} "$img"
+        done
+
+  lab03:chart:
+    desc: "Copy vendored chart to ~/acme-k8s-lab and lint it"
+    cmds:
+      - mkdir -p ~/acme-k8s-lab/charts/acme-microservice
+      - cp -r charts/acme-microservice/. ~/acme-k8s-lab/charts/acme-microservice/
+      - helm lint {{.CHART}}
+
+  lab03:data:
+    desc: "dom-data: namespaces, secrets, 2 Postgres StatefulSets, seed Job"
+    cmds:
+      - kubectl apply -f apps/data/namespace.yml
+      - |
+        for d in orders payments inventory; do
+          kubectl create ns "dom-$d" --dry-run=client -o yaml | kubectl apply -f -
+        done
+      - kubectl apply -f apps/data/secrets.yml
+      - kubectl apply -f apps/data/commerce-db/statefulset.yml
+      - kubectl apply -f apps/data/payments-db/statefulset.yml
+      - kubectl -n dom-data rollout status statefulset/commerce-db --timeout=120s
+      - kubectl -n dom-data rollout status statefulset/payments-db --timeout=120s
+      - kubectl apply -f apps/data/seed-job.yml
+      - kubectl -n dom-data wait --for=condition=complete job/db-seed --timeout=120s
+
+  lab03:domains:
+    desc: "helm install orders + payments + inventory into dom-* namespaces"
+    deps: ["lab03:chart"]
+    cmds:
+      - kubectl create ns observability --dry-run=client -o yaml | kubectl apply -f -
+      - |
+        helm upgrade --install orders {{.CHART}} \
+          --namespace dom-orders --set domain=orders \
+          --set image.repository=acme/orders --set image.tag=v1 \
+          --set env.PAYMENTS_URL=http://payments.dom-payments \
+          --set env.INVENTORY_URL=http://inventory.dom-inventory \
+          --set envFromSecrets="{db-creds}" \
+          --set probes.readiness.enabled=true \
+          --set serviceAccount.gsaEmail="orders-app@my-devops-journey-502420.iam.gserviceaccount.com"
+      - |
+        helm upgrade --install payments {{.CHART}} \
+          --namespace dom-payments --set domain=payments \
+          --set image.repository=acme/payments --set image.tag=v1 \
+          --set envFromSecrets="{db-creds}" \
+          --set probes.readiness.enabled=true \
+          --set serviceAccount.gsaEmail="payments-app@my-devops-journey-502420.iam.gserviceaccount.com"
+      - |
+        helm upgrade --install inventory {{.CHART}} \
+          --namespace dom-inventory --set domain=inventory \
+          --set image.repository=acme/inventory --set image.tag=v1 \
+          --set envFromSecrets="{db-creds}" \
+          --set probes.readiness.enabled=true \
+          --set serviceAccount.gsaEmail="inventory-app@my-devops-journey-502420.iam.gserviceaccount.com"
+      - kubectl get pods -A | grep dom-
+
+  # ════════════════ Labs 04–09 · provisioning helpers ═════════════════════
+  # (The egress doors, NetworkPolicies, AuthZ, and ingress gauntlet are
+  #  break/diagnose/fix drills — run them from the docs, not from here.)
+
+  lab04:close-doors:
+    desc: "Delete default route on both workers (egress cut — Lab 04 Step 3)"
+    cmds:
+      - |
+        for n in {{.PROFILE}}-m02 {{.PROFILE}}-m03; do
+          docker exec "$n" ip route del default || true
+          docker exec "$n" ip route
+        done
+
+  lab04:restore:
+    desc: "Restore default route on tagged node only (Door 3)"
+    cmds:
+      - docker exec {{.PROFILE}}-m03 ip route replace default via 10.10.0.1
+      - docker exec {{.PROFILE}}-m02 ip route || echo "m02 still locked down (expected)"
+
+  lab06:istio:
+    desc: "istioctl minimal + accessLog JSON; label dom-* for sidecar injection"
+    cmds:
+      - istioctl install --set profile=minimal --set meshConfig.accessLogFile=/dev/stdout --set meshConfig.accessLogEncoding=JSON -y
+      - kubectl -n istio-system rollout status deploy/istiod --timeout=180s
+      - kubectl label ns dom-orders dom-payments dom-inventory istio-injection=enabled --overwrite
+
+  lab08:metallb:
+    desc: "Install MetalLB (VIP pool configured in-lab via heredoc)"
+    cmds:
+      - kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.8/config/manifests/metallb-native.yaml
+      - kubectl -n metallb-system rollout status deploy/controller --timeout=120s
+      - kubectl -n metallb-system rollout status ds/speaker --timeout=120s
+
+  lab09:flux:
+    desc: "flux install + check (bootstrap is your GitLab choice — see Lab 09)"
+    cmds:
+      - flux install
+      - flux check
+
+  # ════════════════ Lab 11 · Multi-region federation ══════════════════════
+
+  lab11:region:
+    desc: "Stamp a region: task lab11:region REGION=eu OCTET=11 NODES=2 ID=2"
+    vars:
+      REGION: eu
+      OCTET: "11"
+      NODES: "2"
+      ID: "2"
+    cmds:
+      - ./acme-k8s-lab/region-up.sh {{.REGION}} {{.OCTET}} {{.NODES}} {{.ID}}
+
+  lab11:us-id:
+    desc: "Retrofit us cluster with clustermesh identity (acme-us / id 1)"
+    cmds:
+      - helm upgrade cilium cilium/cilium -n kube-system --kube-context {{.PROFILE}} --reuse-values --set cluster.name=acme-us --set cluster.id=1
+      - kubectl --context {{.PROFILE}} -n kube-system rollout restart ds/cilium deploy/cilium-operator
+
+  lab11:mesh:
+    desc: "ClusterMesh enable + connect us<->REGION (default eu)"
+    vars:
+      REGION: eu
+    cmds:
+      - cilium clustermesh enable --context {{.PROFILE}} --service-type NodePort
+      - cilium clustermesh enable --context {{.PROFILE}}-{{.REGION}} --service-type NodePort
+      - cilium clustermesh status --context {{.PROFILE}} --wait
+      - cilium clustermesh status --context {{.PROFILE}}-{{.REGION}} --wait
+      - cilium clustermesh connect --context {{.PROFILE}} --destination-context {{.PROFILE}}-{{.REGION}}
+      - cilium clustermesh status --context {{.PROFILE}}
+
+  # ════════════════ Lifecycle / triage helpers ════════════════════════════
+
+  status:
+    desc: "Profiles, nodes, contexts, cilium — one glance"
+    cmds:
+      - minikube profile list
+      - kubectl config current-context
+      - kubectl get nodes -o wide || echo "(apiserver unreachable - run 'task fixctx')"
+      - kubectl -n kube-system exec ds/cilium -- cilium status --brief 2>/dev/null || true
+
+  routes:
+    desc: "Re-apply underlay routes (triage #03 — routes die with container restarts)"
+    cmds:
+      - task: lab01:routes
+
+  fixctx:
+    desc: "Repoint kubeconfig at the live minikube tunnel port (triage #31)"
+    cmds:
+      - minikube update-context -p {{.PROFILE}}
+
+  stop:
+    desc: "minikube stop (routes reset on next start — run 'task routes' after)"
+    cmds:
+      - minikube stop -p {{.PROFILE}}
+
+  start:
+    desc: "minikube start existing profile + restore routes + fix context"
+    cmds:
+      - minikube start -p {{.PROFILE}}
+      - task: fixctx
+      - task: routes
+
+  clean:
+    desc: "Delete ALL lab profiles + underlay containers/networks (cold rebuild to zero)"
+    prompt: "Delete profiles (acme, acme-eu, acme-asia, acme-cluster, minikube) AND underlay (vpc-router/probe/registry/echo + acme-* networks)?"
+    cmds:
+      - minikube delete -p acme         || true
+      - minikube delete -p acme-eu      || true
+      - minikube delete -p acme-asia    || true
+      - minikube delete -p acme-cluster || true
+      - minikube delete -p minikube     || true
+      - docker rm -f vpc-router probe registry echo 2>/dev/null || true
+      - docker network rm acme-ops acme-main acme-eu acme-asia 2>/dev/null || true
+
+  verify:all:
+    desc: "Readiness spot-checks across labs"
+    deps: ["lab01:verify", "lab02:verify"]
+    cmds:
+      - kubectl get pods -A | grep -E "dom-|observability" || true
+      - kubectl -n dom-data exec commerce-db-0 -- psql -U postgres -d commerce -c '\dn' 2>/dev/null || true

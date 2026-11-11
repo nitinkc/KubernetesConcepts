@@ -34,7 +34,7 @@ theme:
               name: Switch to dark mode
         - media: "(prefers-color-scheme: dark)"
           scheme: slate
-          primary: indigo
+          primary: red
           accent: blue
           toggle:
               icon: material/weather-sunny
@@ -73,6 +73,8 @@ markdown_extensions:
     - pymdownx.emoji:
           emoji_index: !!python/name:material.extensions.emoji.twemoji
           emoji_generator: !!python/name:material.extensions.emoji.to_svg
+    - pymdownx.arithmatex:
+        generic: true
     - toc:
           permalink: true
           title: On this page
@@ -82,7 +84,9 @@ markdown_extensions:
     - pymdownx.snippets:
           base_path: docs
     - tables
-
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 nav:
     - Home: index.md
     - Reference & Cheat Sheets:
@@ -106,6 +110,8 @@ nav:
                 - Lab 09 · FluxCD GitOps Ordering: labs/lab-09-gitops-flux-ordering.md
           - Part E · Production Handoff:
                 - Lab 10 · Cold Rebuild & GKE Handoff: labs/lab-10-cold-rebuild-gke-handoff.md
+          - Part F · Multi-Region Federation:
+                - Lab 11 · Multi-Region Federation & ClusterMesh: labs/lab-11-multiregion-federation.md
     - Planning (Original Docs):
           - GKE Platform Plan (P0–P10): planning/acme-labs-plan.md
           - Minikube Learning Plan (S0–S12): planning/acme-labs-minikube-learning-plan.md

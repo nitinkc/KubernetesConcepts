@@ -9,7 +9,7 @@
 
 When an external client (or Google's Regional Internal L7 Load Balancer in `proxy-only-subnet` `10.10.254.0/23`) sends an HTTP request into a zero-trust mesh workload, **four independent guards evaluate the packet in sequence**:
 
-![North-South ingress gauntlet — four guards](../diagrams/lab08-ingress-gauntlet.drawio.svg)
+![North-South ingress gauntlet — four guards](../diagrams/lab08-ingress-gauntlet.png)
 
 > **Why `externalTrafficPolicy: Local` is mandatory here:** with the default `externalTrafficPolicy: Cluster`, a node receiving traffic for `10.10.0.240` **SNATs the packet to its own Node IP (`10.10.0.10`)** before forwarding to the `orders` pod. That destroys the client's true source IP (`10.10.1.3`), breaking both audit logging and IP-based `NetworkPolicy` / `AuthorizationPolicy`! Setting `externalTrafficPolicy: Local` preserves `10.10.1.3` all the way to the pod.
 
@@ -20,10 +20,8 @@ When an external client (or Google's Regional Internal L7 Load Balancer in `prox
 ### Step 1: Install MetalLB & Allocate the Internal VIP Pool (`10.10.0.240-249`)
 
 ```bash
-# 1. Install MetalLB native manifest
-kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.8/config/manifests/metallb-native.yaml
-kubectl -n metallb-system rollout status deploy/controller --timeout=180s
-kubectl -n metallb-system rollout status ds/speaker --timeout=180s
+# 1. Install MetalLB native manifest (+ waits for controller & speaker)
+task lab08:metallb
 
 # 2. Configure L2 IPAddressPool on acme-main (10.10.0.240 - 10.10.0.249)
 kubectl apply -f - <<'EOF'

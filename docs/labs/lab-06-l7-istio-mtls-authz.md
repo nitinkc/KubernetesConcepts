@@ -7,7 +7,7 @@
 
 ## 1. Architecture Decision: Why Combine L4 `NetworkPolicy` AND L7 `AuthorizationPolicy`?
 
-![Two guards, two failure signatures](../diagrams/lab06-mesh-guards.drawio.svg)
+![Two guards, two failure signatures](../diagrams/lab06-mesh-guards.png)
 
 | Security Layer | Enforced By | What It Checks | Failure Signature |
 | --- | --- | --- | --- |
@@ -25,15 +25,9 @@ We deliberately use **Sidecar Mode** (`profile=minimal`) with JSON access loggin
 
 ```bash
 # 1. Install istiod control plane
-istioctl install --set profile=minimal \
-  --set meshConfig.accessLogFile=/dev/stdout \
-  --set meshConfig.accessLogEncoding=JSON -y
-
-kubectl -n istio-system rollout status deploy/istiod --timeout=180s
-
-# 2. Label the 3 domain namespaces for automatic sidecar injection
-#    NOTE: dom-data stays OUT of the mesh on purpose — see Step 5 for why.
-kubectl label ns dom-orders dom-payments dom-inventory istio-injection=enabled --overwrite
+task lab06:istio   # istioctl minimal + JSON access logs + waits for istiod,
+                   # then labels dom-orders/dom-payments/dom-inventory for injection
+                   # NOTE: dom-data stays OUT of the mesh on purpose — see Step 5.
 
 # 3. Check pods BEFORE restarting deployments: Notice they are still 1/1!
 kubectl get pods -n dom-orders

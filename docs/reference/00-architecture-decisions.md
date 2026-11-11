@@ -8,7 +8,7 @@
 
 Pod and Service CIDRs are **baked in at cluster creation** and painful to change later. Always allocate four distinct address classes before touching Docker, Minikube, or Terraform.
 
-![Master IPAM blueprint](../diagrams/adr-ipam-blueprint.drawio.svg)
+![Master IPAM blueprint](../diagrams/adr-ipam-blueprint.png)
 
 | Address Space | CIDR | Total IPs | Per-Node / Purpose | Who Allocates It? | Routable Outside Cluster? | GCP Equivalent |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -26,20 +26,33 @@ Pod and Service CIDRs are **baked in at cluster creation** and painful to change
 2. **Overlap Is Silent Until You Connect Networks:** Two clusters with `10.20.0.0/20` run fine in isolation. The day you peer their VPCs or attach them to Cloud Router/VPN, routing breaks catastrophically.
 3. **Never Burn `10.x` on Managed Databases:** Use RFC 6598 (`100.64.0.0/10`) for Private Services Access (Cloud SQL) so enterprise `10.x` ranges remain clean for VPCs and on-prem spokes.
 
+### Regional Extension (Lab 11 · Option B)
+
+When a second cluster is justified (see ADR-01), each region gets a self-contained slice of the blueprint — third-octet = region index for nodes, `+10` for pods, `+20` for services. Allocate all rows **before** peering.
+
+| Region | Profile | Node Subnet | Pod CIDR | Service CIDR | Cilium `cluster.id` | Domain |
+| --- | --- | --- | --- | --- | --- | --- |
+| us (hub) | `acme` | `10.10.0.0/24` (`acme-main`) | `10.20.0.0/20` | `10.30.0.0/24` | 1 | `orders` |
+| eu | `acme-eu` | `10.11.0.0/24` (`acme-eu`) | `10.21.0.0/20` | `10.31.0.0/24` | 2 | `payments` |
+| asia | `acme-asia` | `10.12.0.0/24` (`acme-asia`) | `10.22.0.0/20` | `10.32.0.0/24` | 3 | `inventory` |
+
+All `acme-*` subnets live inside `10.8.0.0/13` — one route per node sends every region through its local `vpc-router` leg (`10.1x.0.250`), the NCC hub-spoke twin.
+
 ---
 
 ## 2. Core Architectural Decision Records (ADRs)
 
 ### ADR-01: Multi-Domain Isolation — 1 Shared Cluster vs 3 Separate Clusters
 
-![ADR-01 — Cluster isolation options](../diagrams/adr-cluster-isolation.drawio.svg)
+![ADR-01 — Cluster isolation options](../diagrams/adr-cluster-isolation.png)
 
 | Dimension | Option A: 1 Cluster + Layered Zero-Trust (Chosen) | Option B: 3 Clusters in 3 VPCs |
 | --- | --- | --- |
 | **Control Plane & Node Cost** | **1x** (Fits free-tier zonal credit; high bin-packing density) | **3x** management fees, 3x idle node headroom, 3x Istio/Flux control planes |
 | **East-West Latency** | Sub-millisecond (Same VPC, Cilium eBPF direct routing) | Requires VPC Peering / NCC / Private Service Connect + cross-cluster ingress |
 | **Security Boundary** | **Defense-in-Depth:** L4 eBPF (`NetworkPolicy`) + L7 Crypto Identity (`SPIFFE`) + Cloud IAM (`Workload Identity`) | Hard kernel/VPC boundary |
-| **When to Switch to Option B?** | When regulatory compliance (PCI-DSS CDE vs non-CDE) mandates **separate VPC firewall tables** or teams require **independent GKE upgrade cadences**. *(Compromise: Per-domain node pools with dedicated pod secondary ranges in 1 cluster).* |
+| **When to Switch to Option B?** | — | When regulatory compliance (PCI-DSS CDE vs non-CDE) mandates **separate VPC firewall tables** or teams require **independent GKE upgrade cadences**. *(Compromise: Per-domain node pools with dedicated pod secondary ranges in 1 cluster).* |
+| **Where is Option B hands-on?** | — | **[Lab 11 · Multi-Region Federation & ClusterMesh](../labs/lab-11-multiregion-federation.md)** builds it end-to-end: `region-up.sh` cluster factory + NCC hub-spoke twin + Cilium ClusterMesh (MCS twin). |
 
 ---
 
@@ -66,7 +79,7 @@ Pod and Service CIDRs are **baked in at cluster creation** and painful to change
 
 ### ADR-04: Observability — Why 3 Telemetry Patterns in a 4-Container Pod?
 
-![ADR-04 — Three telemetry patterns](../diagrams/adr-telemetry-patterns.drawio.svg)
+![ADR-04 — Three telemetry patterns](../diagrams/adr-telemetry-patterns.png)
 
 | Pattern | Mechanism | Pros | Cons / Network Trap |
 | --- | --- | --- | --- |
@@ -78,7 +91,7 @@ Pod and Service CIDRs are **baked in at cluster creation** and painful to change
 
 ### ADR-05: Ownership Boundary — Terraform vs FluxCD Handshake
 
-![ADR-05 — Terraform ⇄ Flux handshake](../diagrams/adr-terraform-flux-handshake.drawio.svg)
+![ADR-05 — Terraform ⇄ Flux handshake](../diagrams/adr-terraform-flux-handshake.png)
 
 * **Rule:** Terraform **never** runs `kubectl apply` or uses the Kubernetes/Helm Terraform providers.
 * **Why?**

@@ -51,18 +51,6 @@ See [docs/context/agents/quick-reference.md](docs/context/agents/quick-reference
 - Verify docs changes with `mkdocs build --strict` before committing.
 - Keep the shared IPAM (`docs/reference/00-architecture-decisions.md`) consistent — it is load-bearing across all labs.
 
-## Hard Rules
-
-See [docs/context/agents/hard-rules.md](docs/context/agents/hard-rules.md).
-
-## Pending Work
-
-> See [docs/progress/features.json](docs/progress/features.json) for full status.
-
-- `troubleshooting-scenarios`, `10-hpa-vpa`, `terraform-k8s.md` — complete on disk, **untracked in git**
-- `gcp-execution` — P0–P10 GCP build is planned, not started
-- `rebuild-scripts` — `cluster-up.sh`/`verify-all.sh` live outside the repo; committing them is open
-- `repo-hygiene` — stale `repo_url`, duplicate glightbox pin, stray `diagrams/` dir, empty `src/11-stateful-set/`
 
 ## Debugging Tips
 

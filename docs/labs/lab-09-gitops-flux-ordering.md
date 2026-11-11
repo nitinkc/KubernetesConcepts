@@ -9,7 +9,7 @@
 
 If you dump all your Kubernetes YAMLs into a single folder and point Flux or ArgoCD at it, **a cold cluster rebuild will fail every time**:
 
-![FluxCD dependency tiers](../diagrams/lab09-flux-tiers.drawio.svg)
+![FluxCD dependency tiers](../diagrams/lab09-flux-tiers.png)
 
 | Object | Which Tier Owns It? | What Breaks If It Runs Out of Order? |
 | --- | --- | --- |
@@ -286,11 +286,8 @@ cp apps/data/seed-job.yml               ~/acme-k8s-lab/gitops/infrastructure/dat
 Ensure your cluster can reach GitLab (remember Lab 04: `acme-m03` has the `allowed-open-nat=true` default route, or restore default route on nodes for bootstrap):
 
 ```bash
-# Install Flux controllers (or use `flux bootstrap gitlab ...` with your GITLAB_TOKEN)
-flux install
-
-# Verify Flux controllers are Ready
-flux check
+task lab09:flux   # flux install + flux check
+# (or `flux bootstrap gitlab ...` with your GITLAB_TOKEN for GitLab-backed parity)
 ```
 
  If bootstrapping with GitLab (recommended for GCP P5 parity):

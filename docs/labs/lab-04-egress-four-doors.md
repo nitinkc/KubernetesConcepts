@@ -17,7 +17,7 @@
 
 ## 2. Visual Blueprint: The 4 Outbound Doors
 
-![The four approved egress doors](../diagrams/lab04-four-egress-doors.drawio.svg)
+![The four approved egress doors](../diagrams/lab04-four-egress-doors.png)
 
 ---
 
@@ -67,11 +67,7 @@ docker logs echo --tail 3
 Now flip `training_wheels = false` by deleting `default` (`0.0.0.0/0`) on both worker nodes (`acme-m02` and `acme-m03`):
 
 ```bash
-for n in acme-m02 acme-m03; do
-  docker exec "$n" ip route del default || true
-  echo "=== Routes on $n ==="
-  docker exec "$n" ip route
-done
+task lab04:close-doors   # deletes default route on m02 + m03, prints remaining routes
 ```
 
 Test internet access from `acme-m02` now:
@@ -112,11 +108,8 @@ probe_node acme-m02 https://www.google.com || echo "Blocked! Only the /32 VIP ha
 In Lab 02, we labeled `acme-m03` with `allowed-open-nat=true`. In GCP, a tag-scoped route `0.0.0.0/0` applies **only** to nodes with that tag:
 
 ```bash
-# Restore default route ONLY on nodes labeled allowed-open-nat=true (acme-m03)
-for n in $(kubectl get nodes -l allowed-open-nat=true -o jsonpath='{.items[*].metadata.name}'); do
-  echo "Opening Door 3 (NAT default route) on tagged node: $n"
-  docker exec "$n" ip route replace default via 10.10.0.1
-done
+# Restore default route ONLY on the tagged node (acme-m03 carries allowed-open-nat=true)
+task lab04:restore   # on GCP this is a tag-scoped 0.0.0.0/0 route — tags select targets
 
 # Compare untagged node (acme-m02) vs tagged node (acme-m03) for google.com:
 probe_node acme-m02 https://www.google.com || echo "acme-m02: Blocked (No tag)"
