@@ -112,6 +112,15 @@ nav:
                 - Lab 10 · Cold Rebuild & GKE Handoff: labs/lab-10-cold-rebuild-gke-handoff.md
           - Part F · Multi-Region Federation:
                 - Lab 11 · Multi-Region Federation & ClusterMesh: labs/lab-11-multiregion-federation.md
+          - Part G · Secrets, Delivery & Operations:
+                - Lab 12 · External Secrets Operator: labs/lab-12-external-secrets.md
+                - Lab 13 · GitOps Secrets with sops: labs/lab-13-gitops-secrets.md
+                - Lab 14 · Canary with Flagger + Istio: labs/lab-14-progressive-delivery.md
+                - Lab 15 · PDBs, Drains & Upgrades: labs/lab-15-cluster-maintenance.md
+                - Lab 16 · DR with Velero: labs/lab-16-dr-backup-restore.md
+                - Lab 17 · RBAC, cert-manager & Operators: labs/lab-17-access-and-admission.md
+                - Lab 18 · Policy-as-Code with Kyverno: labs/lab-18-policy-as-code.md
+                - Lab 19 · Kustomize & Env Promotion: labs/lab-19-kustomize-and-promotion.md
     - Planning (Original Docs):
           - GKE Platform Plan (P0–P10): planning/acme-labs-plan.md
           - Minikube Learning Plan (S0–S12): planning/acme-labs-minikube-learning-plan.md
